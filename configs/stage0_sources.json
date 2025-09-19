@@ -1,29 +1,3 @@
-{
-  "sources": [
-    {
-      "name": "science",
-      "paths": ["data/raw/domains/science/*.txt"],
-      "weight": 0.35
-    },
-    {
-      "name": "data",
-      "paths": ["data/raw/domains/data/*.txt"],
-      "weight": 0.2
-    },
-    {
-      "name": "code",
-      "paths": ["data/raw/domains/code/*.py"],
-      "weight": 0.25
-    },
-    {
-      "name": "chess",
-      "paths": ["data/raw/domains/chess/*.pgn"],
-      "weight": 0.15
-    },
-    {
-      "name": "general",
-      "paths": ["data/raw/domains/general/*.txt"],
-      "weight": 0.05
-    }
-  ]
-}
+version https://git-lfs.github.com/spec/v1
+oid sha256:2ce10abc3f389bc3b68b687221b980fee15db7469b43f3092b4554df2d910402
+size 708

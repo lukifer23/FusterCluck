@@ -1,3 +1,3 @@
-The Lagrangian density for a scalar field combines kinetic and potential terms in a relativistic invariant form.
-Bayesian inference treats model parameters as random variables, updating beliefs with observed evidence.
-Gradient flow on a loss surface gives insight into the stability of stationary points in deep networks.
+version https://git-lfs.github.com/spec/v1
+oid sha256:594f327671b7c69f5f23c14e87216ef94f182f4c2fba0651241d3c2af319492d
+size 322

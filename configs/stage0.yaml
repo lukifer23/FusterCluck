@@ -3,11 +3,11 @@ stage0:
   idx_path: data/tokenized/stage0.idx
   tokenizer_path: artifacts/tokenizer/fustercluck.model
   max_steps: 2000
-  seq_len: 2048
+  seq_len: 1408
   micro_batch_size: 4
   gradient_accumulation: 8
   precision: bf16
-  log_interval: 10
+  log_interval: 20
   eval_interval: 200
   checkpoint_dir: artifacts/checkpoints/stage0
   optimizer:
