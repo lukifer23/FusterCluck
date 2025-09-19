@@ -6,16 +6,12 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, Any, Iterable
+from typing import Iterable
 
-import torch
-import yaml
 from omegaconf import OmegaConf
 
 from fustercluck.train.stage0 import Stage0Trainer
-from fustercluck.train.config import Stage0Config, TrainerConfig
-from fustercluck.data.tokenized_dataset import TokenizedDataset
-from fustercluck.utils.checkpoint import CheckpointManager
+from fustercluck.train.config import OptimizerConfig, Stage0Config, TrainerConfig
 
 # Set up logging
 logging.basicConfig(
@@ -41,7 +37,27 @@ class CloudTrainer:
         
         # Set up monitoring
         self.setup_monitoring()
-        
+
+    def _build_stage_config(self, cfg) -> Stage0Config:
+        """Convert OmegaConf DictConfig into Stage0Config with proper Path objects."""
+        optimizer_cfg = OptimizerConfig(
+            **OmegaConf.to_container(cfg.optimizer, resolve=True)
+        )
+        return Stage0Config(
+            dataset_path=Path(cfg.dataset_path),
+            idx_path=Path(cfg.idx_path),
+            tokenizer_path=Path(cfg.tokenizer_path),
+            max_steps=cfg.max_steps,
+            seq_len=cfg.seq_len,
+            micro_batch_size=cfg.micro_batch_size,
+            gradient_accumulation=cfg.gradient_accumulation,
+            precision=cfg.precision,
+            log_interval=cfg.log_interval,
+            eval_interval=cfg.eval_interval,
+            checkpoint_dir=Path(cfg.checkpoint_dir),
+            optimizer=optimizer_cfg,
+        )
+
     def setup_directories(self):
         """Create necessary directories."""
         dirs = [
@@ -122,22 +138,9 @@ class CloudTrainer:
         """Run Stage 1 training (2B tokens)."""
         logger.info("Starting Stage 1 training...")
         
-        # Convert config to dataclass
-        stage1_cfg = Stage0Config(
-            dataset_path=self.stage1_config.dataset_path,
-            idx_path=self.stage1_config.idx_path,
-            tokenizer_path=self.stage1_config.tokenizer_path,
-            max_steps=self.stage1_config.max_steps,
-            seq_len=self.stage1_config.seq_len,
-            micro_batch_size=self.stage1_config.micro_batch_size,
-            gradient_accumulation=self.stage1_config.gradient_accumulation,
-            precision=self.stage1_config.precision,
-            log_interval=self.stage1_config.log_interval,
-            eval_interval=self.stage1_config.eval_interval,
-            checkpoint_dir=self.stage1_config.checkpoint_dir,
-            optimizer=dict(self.stage1_config.optimizer)
-        )
-        
+        # Convert config to dataclass with proper Path/optimizer types
+        stage1_cfg = self._build_stage_config(self.stage1_config)
+
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
             grad_clip=self.stage1_config.grad_clip,
@@ -157,20 +160,7 @@ class CloudTrainer:
         logger.info("Starting Stage 2 training...")
         
         # Similar to stage1 but with stage2 config
-        stage2_cfg = Stage0Config(
-            dataset_path=self.stage2_config.dataset_path,
-            idx_path=self.stage2_config.idx_path,
-            tokenizer_path=self.stage2_config.tokenizer_path,
-            max_steps=self.stage2_config.max_steps,
-            seq_len=self.stage2_config.seq_len,
-            micro_batch_size=self.stage2_config.micro_batch_size,
-            gradient_accumulation=self.stage2_config.gradient_accumulation,
-            precision=self.stage2_config.precision,
-            log_interval=self.stage2_config.log_interval,
-            eval_interval=self.stage2_config.eval_interval,
-            checkpoint_dir=self.stage2_config.checkpoint_dir,
-            optimizer=dict(self.stage2_config.optimizer)
-        )
+        stage2_cfg = self._build_stage_config(self.stage2_config)
         
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
