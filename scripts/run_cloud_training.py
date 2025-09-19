@@ -21,11 +21,14 @@ from fustercluck.train.config import (
 from fustercluck.train.stage_multimodal import StageMultimodalTrainer
 
 # Set up logging
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='[%(asctime)s] %(levelname)s: %(message)s',
     handlers=[
-        logging.FileHandler('logs/cloud_training.log'),
+        logging.FileHandler(LOG_DIR / 'cloud_training.log'),
         logging.StreamHandler()
     ]
 )
