@@ -10,13 +10,20 @@ if [ ! -f "/runpod/runpod.sock" ]; then
     echo "⚠️  This script is optimized for RunPod. Proceeding anyway..."
 fi
 
+# Determine sudo availability (RunPod containers usually run as root)
+if command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
 # Update system
 echo "📦 Updating system packages..."
-sudo apt update && sudo apt upgrade -y
+$SUDO apt-get update && $SUDO apt-get upgrade -y
 
 # Install system dependencies
 echo "🔧 Installing system dependencies..."
-sudo apt install -y \
+$SUDO apt-get install -y \
     git \
     curl \
     wget \
@@ -28,8 +35,12 @@ sudo apt install -y \
     build-essential \
     python3-dev \
     python3-pip \
-    python3-venv \
-    nvidia-utils-535
+    python3-venv
+
+# Ensure NVIDIA utilities are present (version differs by base image)
+if ! command -v nvidia-smi >/dev/null 2>&1; then
+    $SUDO apt-get install -y nvidia-utils-550 || $SUDO apt-get install -y nvidia-utils-535
+fi
 
 # Check GPU
 echo "🎮 Checking GPU..."
