@@ -80,7 +80,7 @@ def parse_args() -> argparse.Namespace:
         type=DatasetSpec.parse,
         required=True,
         help="Dataset spec name:split:text_field[:max_samples]. "
-        "Example: HuggingFaceM4/RefinedWeb:train:text:500000",
+        "Example: huggingface/RefinedWeb:train:text:500000",
     )
     parser.add_argument(
         "--output",

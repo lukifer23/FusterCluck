@@ -27,7 +27,9 @@ dependencies = [
     "transformers>=4.40",
     "accelerate>=0.30",
     "einops>=0.7",
-    "safetensors>=0.4"
+    "safetensors>=0.4",
+    "zstandard>=0.22.0",
+    "py7zr>=0.20.8"
 ]
 
 [tool.setuptools.packages.find]
