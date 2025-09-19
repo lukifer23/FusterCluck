@@ -51,4 +51,8 @@ class TrainerConfig:
     use_compile: bool = True
     compile_mode: str = "reduce-overhead"
     precision: str = "bf16"
+    dataloader_workers: int = 0
+    pin_memory: bool = False
+    persistent_workers: bool = False
+    env: Optional[dict[str, str]] = None
     checkpoint: Optional[CheckpointConfig] = None

@@ -141,7 +141,7 @@ class CloudTrainer:
         concat(["science", "data", "code"], "stage1_mix.txt")
         concat(["science", "data", "code", "chess", "general"], "stage2_mix.txt")
         
-    def run_stage1(self):
+    def run_stage1(self, resume: bool = False):
         """Run Stage 1 training (2B tokens)."""
         logger.info("Starting Stage 1 training...")
 
@@ -153,7 +153,13 @@ class CloudTrainer:
             grad_clip=self.stage1_config.grad_clip,
             use_compile=self.trainer_config.use_compile,
             compile_mode=self.trainer_config.compile_mode,
-            precision=self.trainer_config.precision
+            precision=self.trainer_config.precision,
+            dataloader_workers=getattr(self.trainer_config, "dataloader_workers", 0),
+            pin_memory=getattr(self.trainer_config, "pin_memory", False),
+            persistent_workers=getattr(self.trainer_config, "persistent_workers", False),
+            env=OmegaConf.to_container(getattr(self.trainer_config, "env", {}), resolve=True)
+            if getattr(self.trainer_config, "env", None)
+            else None,
         )
         if getattr(self.trainer_config, "env", None):
             os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
@@ -163,14 +169,21 @@ class CloudTrainer:
         total_params = sum(p.numel() for p in trainer.model.parameters())
         trainable_params = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
         logger.info("Stage1 model params: total=%d trainable=%d", total_params, trainable_params)
+        if resume:
+            latest = trainer.checkpoint.latest()
+            if latest:
+                logger.info("Resuming Stage 1 from %s", latest)
+                trainer.resume_from_checkpoint(latest)
+            else:
+                logger.info("No Stage 1 checkpoint found; starting from scratch")
         trainer.train()
 
         logger.info("Stage 1 training complete!")
         
-    def run_stage2(self):
+    def run_stage2(self, resume: bool = False):
         """Run Stage 2 training (5B tokens)."""
         logger.info("Starting Stage 2 training...")
-        
+
         # Similar to stage1 but with stage2 config
         stage2_cfg = self._build_stage_config(self.stage2_config)
 
@@ -179,7 +192,13 @@ class CloudTrainer:
             grad_clip=self.stage2_config.grad_clip,
             use_compile=self.trainer_config.use_compile,
             compile_mode=self.trainer_config.compile_mode,
-            precision=self.trainer_config.precision
+            precision=self.trainer_config.precision,
+            dataloader_workers=getattr(self.trainer_config, "dataloader_workers", 0),
+            pin_memory=getattr(self.trainer_config, "pin_memory", False),
+            persistent_workers=getattr(self.trainer_config, "persistent_workers", False),
+            env=OmegaConf.to_container(getattr(self.trainer_config, "env", {}), resolve=True)
+            if getattr(self.trainer_config, "env", None)
+            else None,
         )
         if getattr(self.trainer_config, "env", None):
             os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
@@ -189,6 +208,13 @@ class CloudTrainer:
         total_params = sum(p.numel() for p in trainer.model.parameters())
         trainable_params = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
         logger.info("Stage2 model params: total=%d trainable=%d", total_params, trainable_params)
+        if resume:
+            latest = trainer.checkpoint.latest()
+            if latest:
+                logger.info("Resuming Stage 2 from %s", latest)
+                trainer.resume_from_checkpoint(latest)
+            else:
+                logger.info("No Stage 2 checkpoint found; starting from scratch")
         trainer.train()
         
         logger.info("Stage 2 training complete!")
@@ -234,6 +260,7 @@ def main():
     parser.add_argument("--config", type=str, default="configs/cloud_training.yaml")
     parser.add_argument("--stage", type=str, choices=["1", "2", "both"], default="both")
     parser.add_argument("--skip-data", action="store_true", help="Skip data download/processing")
+    parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoints for selected stages")
     
     args = parser.parse_args()
     
@@ -243,10 +270,10 @@ def main():
         trainer.download_and_process_data()
     
     if args.stage in ["1", "both"]:
-        trainer.run_stage1()
-    
+        trainer.run_stage1(resume=args.resume)
+
     if args.stage in ["2", "both"]:
-        trainer.run_stage2()
+        trainer.run_stage2(resume=args.resume)
 
 if __name__ == "__main__":
     main()

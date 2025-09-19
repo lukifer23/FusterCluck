@@ -78,7 +78,7 @@ trainer:
   precision: bf16
   gradient_checkpointing: true
   activation_recompute: true
-  dataloader_workers: 8
+  dataloader_workers: 16
   pin_memory: true
   persistent_workers: true
   env:

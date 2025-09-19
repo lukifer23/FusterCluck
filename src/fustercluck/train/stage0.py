@@ -48,9 +48,23 @@ class PackedSequenceDataset(IterableDataset):
             yield torch.tensor(padded, dtype=torch.long)
 
 
-def create_dataloader(dataset: TokenizedDataset, cfg: Stage0Config) -> DataLoader:
+def create_dataloader(
+    dataset: TokenizedDataset,
+    cfg: Stage0Config,
+    trainer_cfg: TrainerConfig | None = None,
+) -> DataLoader:
     iterable = PackedSequenceDataset(dataset, cfg.seq_len)
-    return DataLoader(iterable, batch_size=cfg.micro_batch_size, drop_last=True)
+    loader_kwargs = {
+        "batch_size": cfg.micro_batch_size,
+        "drop_last": True,
+    }
+    if trainer_cfg is not None:
+        num_workers = getattr(trainer_cfg, "dataloader_workers", 0)
+        if num_workers:
+            loader_kwargs["num_workers"] = num_workers
+            loader_kwargs["persistent_workers"] = getattr(trainer_cfg, "persistent_workers", False)
+        loader_kwargs["pin_memory"] = getattr(trainer_cfg, "pin_memory", False)
+    return DataLoader(iterable, **loader_kwargs)
 
 
 def apply_compile(model: torch.nn.Module, trainer_cfg: TrainerConfig) -> torch.nn.Module:
@@ -129,7 +143,7 @@ class Stage0Trainer:
         )
 
     def _make_iterator(self):
-        return iter(create_dataloader(self.dataset, self.cfg))
+        return iter(create_dataloader(self.dataset, self.cfg, self.trainer_cfg))
 
     def _next_batch(self) -> torch.Tensor:
         try:
@@ -195,10 +209,35 @@ class Stage0Trainer:
                 batch = self._next_batch()
                 eval_loss = evaluate(self.model, batch.to(self.device), self.device)
                 LOGGER.info("eval_loss=%.4f", eval_loss)
-                self.checkpoint.save(self.step, self.model, self.optimizer, loss=eval_loss)
+                self.checkpoint.save(
+                    self.step,
+                    self.model,
+                    self.optimizer,
+                    step=self.step,
+                    eval_loss=eval_loss,
+                    elapsed=self.total_elapsed,
+                )
 
             if math.isnan(loss_accum):
                 raise RuntimeError("NaN detected in loss")
+
+    def resume_from_checkpoint(self, checkpoint_path: Path) -> None:
+        state = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(state["model"])  # type: ignore[index]
+        self.optimizer.load_state_dict(state["optimizer"])  # type: ignore[index]
+        metadata = state.get("metadata", {})
+        resume_step = int(metadata.get("step", self._step_from_filename(checkpoint_path)))
+        self.step = resume_step
+        self.total_elapsed = float(metadata.get("elapsed", self.total_elapsed))
+        LOGGER.info("Resumed from %s at step=%d", checkpoint_path, self.step)
+        self.throughput.reset()
+
+    @staticmethod
+    def _step_from_filename(path: Path) -> int:
+        try:
+            return int(path.stem.split("-")[-1])
+        except ValueError:
+            return 0
 
 
 def run_stage0(cfg: Stage0Config, trainer_cfg: TrainerConfig | None = None) -> None:
