@@ -28,6 +28,13 @@ class Stage0Config:
     log_interval: int = 5
     eval_interval: int = 100
     checkpoint_dir: Path = Path("artifacts/checkpoints/stage0")
+    model_dim: int = 1024
+    model_layers: int = 4
+    model_heads: int = 16
+    model_kv_heads: int = 4
+    mlp_ratio: float = 4.0
+    rope_theta: int = 10000
+    dropout: float = 0.0
     optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
 
 

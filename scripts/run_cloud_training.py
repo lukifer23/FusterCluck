@@ -55,6 +55,13 @@ class CloudTrainer:
             log_interval=cfg.log_interval,
             eval_interval=cfg.eval_interval,
             checkpoint_dir=Path(cfg.checkpoint_dir),
+            model_dim=getattr(cfg, "model_dim", 1024),
+            model_layers=getattr(cfg, "model_layers", 4),
+            model_heads=getattr(cfg, "model_heads", 16),
+            model_kv_heads=getattr(cfg, "model_kv_heads", 4),
+            mlp_ratio=getattr(cfg, "mlp_ratio", 4.0),
+            rope_theta=getattr(cfg, "rope_theta", 10000),
+            dropout=getattr(cfg, "dropout", 0.0),
             optimizer=optimizer_cfg,
         )
 

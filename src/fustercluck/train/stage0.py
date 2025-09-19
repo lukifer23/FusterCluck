@@ -90,7 +90,16 @@ class Stage0Trainer:
         self.checkpoint = CheckpointManager(cfg.checkpoint_dir)
 
         vocab_size = load_vocab(cfg.tokenizer_path)
-        self.model = FusterCluckDecoder(vocab_size=vocab_size, dim=1024, num_layers=4)
+        self.model = FusterCluckDecoder(
+            vocab_size=vocab_size,
+            dim=cfg.model_dim,
+            num_layers=cfg.model_layers,
+            num_heads=cfg.model_heads,
+            num_kv_heads=cfg.model_kv_heads,
+            mlp_ratio=cfg.mlp_ratio,
+            rope_theta=cfg.rope_theta,
+            dropout=cfg.dropout,
+        )
         self.model.to(self.device)
 
         self.optimizer = torch.optim.AdamW(

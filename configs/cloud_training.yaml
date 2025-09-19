@@ -19,6 +19,13 @@ stage1:
   log_interval: 50
   eval_interval: 500
   checkpoint_dir: "artifacts/checkpoints/cloud/stage1"
+  model_dim: 1024
+  model_layers: 24
+  model_heads: 16
+  model_kv_heads: 4
+  mlp_ratio: 4.0
+  rope_theta: 10000
+  dropout: 0.0
   optimizer:
     lr: 2.5e-4
     betas: [0.9, 0.95]
@@ -45,6 +52,13 @@ stage2:
   log_interval: 50
   eval_interval: 500
   checkpoint_dir: "artifacts/checkpoints/cloud/stage2"
+  model_dim: 1024
+  model_layers: 24
+  model_heads: 16
+  model_kv_heads: 4
+  mlp_ratio: 4.0
+  rope_theta: 10000
+  dropout: 0.0
   optimizer:
     lr: 2.0e-4  # Slightly lower LR for stage 2
     betas: [0.9, 0.95]
