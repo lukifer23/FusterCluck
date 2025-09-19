@@ -186,7 +186,7 @@ class CloudTrainer:
 
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
-            grad_clip=vision_cfg.grad_clip,
+            grad_clip=self.stage1_config.grad_clip,
             use_compile=self.trainer_config.use_compile,
             compile_mode=self.trainer_config.compile_mode,
             precision=self.trainer_config.precision,
