@@ -25,5 +25,7 @@ def amp_autocast(precision: str, device: torch.device) -> contextlib.AbstractCon
     return contextlib.nullcontext()
 
 
-def ensure_dir(path: Path) -> None:
+def ensure_dir(path) -> None:
+    if isinstance(path, str):
+        path = Path(path)
     path.mkdir(parents=True, exist_ok=True)
