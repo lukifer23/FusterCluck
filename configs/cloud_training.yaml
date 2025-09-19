@@ -16,7 +16,7 @@ stage1:
   gradient_accumulation: 64
   effective_batch_size: 524288  # 4096 * 2 * 64
   precision: bf16
-  log_interval: 50
+  log_interval: 20
   eval_interval: 500
   checkpoint_dir: "artifacts/checkpoints/cloud/stage1"
   model_dim: 1024
@@ -49,7 +49,7 @@ stage2:
   gradient_accumulation: 64
   effective_batch_size: 524288
   precision: bf16
-  log_interval: 50
+  log_interval: 20
   eval_interval: 500
   checkpoint_dir: "artifacts/checkpoints/cloud/stage2"
   model_dim: 1024

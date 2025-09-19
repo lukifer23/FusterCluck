@@ -160,6 +160,9 @@ class CloudTrainer:
 
         # Run training
         trainer = Stage0Trainer(stage1_cfg, trainer_cfg)
+        total_params = sum(p.numel() for p in trainer.model.parameters())
+        trainable_params = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
+        logger.info("Stage1 model params: total=%d trainable=%d", total_params, trainable_params)
         trainer.train()
 
         logger.info("Stage 1 training complete!")
@@ -183,6 +186,9 @@ class CloudTrainer:
 
         # Run training
         trainer = Stage0Trainer(stage2_cfg, trainer_cfg)
+        total_params = sum(p.numel() for p in trainer.model.parameters())
+        trainable_params = sum(p.numel() for p in trainer.model.parameters() if p.requires_grad)
+        logger.info("Stage2 model params: total=%d trainable=%d", total_params, trainable_params)
         trainer.train()
         
         logger.info("Stage 2 training complete!")
