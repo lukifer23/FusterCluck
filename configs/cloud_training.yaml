@@ -12,9 +12,9 @@ stage1:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 4000
   seq_len: 4096
-  micro_batch_size: 2
-  gradient_accumulation: 64
-  effective_batch_size: 524288  # 4096 * 2 * 64
+  micro_batch_size: 4
+  gradient_accumulation: 32
+  effective_batch_size: 524288  # 4096 * 4 * 32
   precision: bf16
   log_interval: 20
   eval_interval: 500
@@ -45,8 +45,8 @@ stage2:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 10000
   seq_len: 4096
-  micro_batch_size: 2
-  gradient_accumulation: 64
+  micro_batch_size: 4
+  gradient_accumulation: 32
   effective_batch_size: 524288
   precision: bf16
   log_interval: 20
@@ -75,8 +75,8 @@ stage3:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 1000
   seq_len: 3072
-  micro_batch_size: 1
-  gradient_accumulation: 64
+  micro_batch_size: 2
+  gradient_accumulation: 48
   precision: bf16
   log_interval: 20
   eval_interval: 200
@@ -108,8 +108,8 @@ stage4:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 1500
   seq_len: 3072
-  micro_batch_size: 1
-  gradient_accumulation: 64
+  micro_batch_size: 2
+  gradient_accumulation: 48
   precision: bf16
   log_interval: 20
   eval_interval: 200
@@ -149,10 +149,9 @@ trainer:
   persistent_workers: true
   env:
     PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
-    TORCH_CUDA_FUSER_DISABLE: "1"
-    TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_TUNERS: "0"
-    TORCHINDUCTOR_MAX_AUTOTUNE_LOCATIONS: "0"
-    TORCHINDUCTOR_MAX_AUTOTUNE: "0"
+    TORCH_CUDA_FUSER_DISABLE: "0"
+    TORCHINDUCTOR_MAX_AUTOTUNE: "1"
+    TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_TUNERS: "max"
   checkpoint:
     directory: "artifacts/checkpoints/cloud"
     keep_last: 10
