@@ -215,8 +215,25 @@ class FusterCluckDecoder(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
-    def forward(self, input_ids: torch.Tensor, attention_mask: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        vision_embeddings: Optional[torch.Tensor] = None,
+        vision_mask: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         x = self.embed(input_ids)
+        if vision_embeddings is not None:
+            if vision_mask is None:
+                raise ValueError("vision_mask is required when vision_embeddings are provided")
+            bsz = x.size(0)
+            num_queries = vision_embeddings.size(1)
+            for batch_idx in range(bsz):
+                positions = vision_mask[batch_idx].nonzero(as_tuple=False).squeeze(-1)
+                if positions.numel() == 0:
+                    continue
+                count = min(positions.numel(), num_queries)
+                x[batch_idx, positions[:count]] = vision_embeddings[batch_idx, :count]
         for layer in self.layers:
             x = layer(x, attention_mask)
         x = self.final_norm(x)

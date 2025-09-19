@@ -132,6 +132,9 @@ class Stage0Trainer:
         self.throughput = ThroughputTracker()
         self.total_elapsed = 0.0
         effective_batch = cfg.seq_len * cfg.micro_batch_size * cfg.gradient_accumulation
+        if self.device.type == "cuda":
+            torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore
+            torch.backends.cudnn.allow_tf32 = True
         LOGGER.info(
             "Stage0 setup: device=%s precision=%s seq_len=%d micro_batch=%d grad_accum=%d effective_tokens=%d",
             self.device,

@@ -11,7 +11,14 @@ from typing import Iterable
 from omegaconf import OmegaConf
 
 from fustercluck.train.stage0 import Stage0Trainer
-from fustercluck.train.config import OptimizerConfig, Stage0Config, TrainerConfig
+from fustercluck.train.config import (
+    OptimizerConfig,
+    Stage0Config,
+    StageVisionConfig,
+    TrainerConfig,
+    VisionAdapterConfig,
+)
+from fustercluck.train.stage_multimodal import StageMultimodalTrainer
 
 # Set up logging
 logging.basicConfig(
@@ -63,6 +70,35 @@ class CloudTrainer:
             rope_theta=getattr(cfg, "rope_theta", 10000),
             dropout=getattr(cfg, "dropout", 0.0),
             optimizer=optimizer_cfg,
+        )
+
+    def _build_vision_config(self, cfg) -> StageVisionConfig:
+        params = OmegaConf.to_container(cfg, resolve=True)
+        optimizer_cfg = OptimizerConfig(**params.get("optimizer", {}))
+        adapter_cfg = VisionAdapterConfig(**params.get("adapter", {}))
+        return StageVisionConfig(
+            tokenizer_path=Path(params["tokenizer_path"]),
+            max_steps=int(params.get("max_steps", 1000)),
+            seq_len=int(params["seq_len"]),
+            micro_batch_size=int(params["micro_batch_size"]),
+            gradient_accumulation=int(params["gradient_accumulation"]),
+            precision=params.get("precision", "bf16"),
+            log_interval=int(params.get("log_interval", 100)),
+            eval_interval=int(params.get("eval_interval", 500)),
+            checkpoint_dir=Path(params["checkpoint_dir"]),
+            model_dim=int(params.get("model_dim", 1024)),
+            model_layers=int(params.get("model_layers", 24)),
+            model_heads=int(params.get("model_heads", 16)),
+            model_kv_heads=int(params.get("model_kv_heads", 4)),
+            mlp_ratio=float(params.get("mlp_ratio", 4.0)),
+            rope_theta=int(params.get("rope_theta", 10000)),
+            dropout=float(params.get("dropout", 0.0)),
+            optimizer=optimizer_cfg,
+            vision_shards=params.get("vision_shards", []),
+            shuffle_buffer=int(params.get("shuffle_buffer", 2048)),
+            image_token=params.get("image_token", "<image>"),
+            image_token_id=params.get("image_token_id"),
+            adapter=adapter_cfg,
         )
 
     def setup_directories(self):
@@ -150,7 +186,7 @@ class CloudTrainer:
 
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
-            grad_clip=self.stage1_config.grad_clip,
+            grad_clip=vision_cfg.grad_clip,
             use_compile=self.trainer_config.use_compile,
             compile_mode=self.trainer_config.compile_mode,
             precision=self.trainer_config.precision,
@@ -179,7 +215,7 @@ class CloudTrainer:
         trainer.train()
 
         logger.info("Stage 1 training complete!")
-        
+
     def run_stage2(self, resume: bool = False):
         """Run Stage 2 training (5B tokens)."""
         logger.info("Starting Stage 2 training...")
@@ -216,9 +252,86 @@ class CloudTrainer:
             else:
                 logger.info("No Stage 2 checkpoint found; starting from scratch")
         trainer.train()
-        
+
         logger.info("Stage 2 training complete!")
-        
+
+    def run_stage3(self, resume: bool = False):
+        """Run Stage 3 multimodal alignment."""
+        if "stage3" not in self.config:
+            raise RuntimeError("stage3 configuration missing from YAML")
+        vision_cfg = self._build_vision_config(self.config.stage3)
+        if not vision_cfg.vision_shards:
+            raise RuntimeError("stage3.vision_shards is empty – provide WebDataset shards")
+        trainer_cfg = TrainerConfig(
+            device=self.trainer_config.device,
+            grad_clip=vision_cfg.grad_clip,
+            use_compile=self.trainer_config.use_compile,
+            compile_mode=self.trainer_config.compile_mode,
+            precision=self.trainer_config.precision,
+            dataloader_workers=getattr(self.trainer_config, "dataloader_workers", 0),
+            pin_memory=getattr(self.trainer_config, "pin_memory", False),
+            persistent_workers=getattr(self.trainer_config, "persistent_workers", False),
+            env=OmegaConf.to_container(getattr(self.trainer_config, "env", {}), resolve=True)
+            if getattr(self.trainer_config, "env", None)
+            else None,
+        )
+        if getattr(self.trainer_config, "env", None):
+            os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
+        trainer = StageMultimodalTrainer(vision_cfg, trainer_cfg)
+        total_params = sum(p.numel() for p in trainer.model.parameters()) + sum(
+            p.numel() for p in trainer.adapter.parameters()
+        )
+        trainable_params = sum(
+            p.numel() for p in list(trainer.model.parameters()) + list(trainer.adapter.parameters()) if p.requires_grad
+        )
+        logger.info("Stage3 model params: total=%d trainable=%d", total_params, trainable_params)
+        if resume:
+            latest = trainer.checkpoint.latest()
+            if latest:
+                trainer.resume_from_checkpoint(latest)
+            else:
+                logger.info("No Stage 3 checkpoint found; starting from scratch")
+        trainer.train()
+        logger.info("Stage 3 training complete!")
+
+    def run_stage4(self, resume: bool = False):
+        """Run Stage 4 multimodal training."""
+        if "stage4" not in self.config:
+            raise RuntimeError("stage4 configuration missing from YAML")
+        vision_cfg = self._build_vision_config(self.config.stage4)
+        if not vision_cfg.vision_shards:
+            raise RuntimeError("stage4.vision_shards is empty – provide WebDataset shards")
+        trainer_cfg = TrainerConfig(
+            device=self.trainer_config.device,
+            grad_clip=self.stage1_config.grad_clip,
+            use_compile=self.trainer_config.use_compile,
+            compile_mode=self.trainer_config.compile_mode,
+            precision=self.trainer_config.precision,
+            dataloader_workers=getattr(self.trainer_config, "dataloader_workers", 0),
+            pin_memory=getattr(self.trainer_config, "pin_memory", False),
+            persistent_workers=getattr(self.trainer_config, "persistent_workers", False),
+            env=OmegaConf.to_container(getattr(self.trainer_config, "env", {}), resolve=True)
+            if getattr(self.trainer_config, "env", None)
+            else None,
+        )
+        if getattr(self.trainer_config, "env", None):
+            os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
+        trainer = StageMultimodalTrainer(vision_cfg, trainer_cfg)
+        total_params = sum(p.numel() for p in trainer.model.parameters()) + sum(
+            p.numel() for p in trainer.adapter.parameters()
+        )
+        trainable_params = sum(
+            p.numel() for p in list(trainer.model.parameters()) + list(trainer.adapter.parameters()) if p.requires_grad
+        )
+        logger.info("Stage4 model params: total=%d trainable=%d", total_params, trainable_params)
+        if resume:
+            latest = trainer.checkpoint.latest()
+            if latest:
+                trainer.resume_from_checkpoint(latest)
+            else:
+                logger.info("No Stage 4 checkpoint found; starting from scratch")
+        trainer.train()
+        logger.info("Stage 4 training complete!")
     def run_full_training(self):
         """Run complete cloud training pipeline."""
         logger.info("Starting full cloud training pipeline...")
@@ -258,22 +371,34 @@ class CloudTrainer:
 def main():
     parser = argparse.ArgumentParser(description="Run FusterCluck cloud training")
     parser.add_argument("--config", type=str, default="configs/cloud_training.yaml")
-    parser.add_argument("--stage", type=str, choices=["1", "2", "both"], default="both")
+    parser.add_argument(
+        "--stage",
+        type=str,
+        choices=["1", "2", "3", "4", "both", "vision", "all", "text"],
+        default="both",
+    )
     parser.add_argument("--skip-data", action="store_true", help="Skip data download/processing")
     parser.add_argument("--resume", action="store_true", help="Resume from latest checkpoints for selected stages")
     
     args = parser.parse_args()
     
     trainer = CloudTrainer(args.config)
-    
-    if not args.skip_data:
+
+    textual_stages = {"1", "2", "both", "all", "text"}
+    if args.stage in textual_stages and not args.skip_data:
         trainer.download_and_process_data()
-    
-    if args.stage in ["1", "both"]:
+
+    if args.stage in {"1", "both", "all", "text"}:
         trainer.run_stage1(resume=args.resume)
 
-    if args.stage in ["2", "both"]:
+    if args.stage in {"2", "both", "all", "text"}:
         trainer.run_stage2(resume=args.resume)
+
+    if args.stage in {"3", "vision", "all"}:
+        trainer.run_stage3(resume=args.resume)
+
+    if args.stage in {"4", "vision", "all"}:
+        trainer.run_stage4(resume=args.resume)
 
 if __name__ == "__main__":
     main()

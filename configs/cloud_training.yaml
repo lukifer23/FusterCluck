@@ -71,6 +71,72 @@ stage2:
   grad_clip: 1.0
   target_tokens: 5_000_000_000
 
+stage3:
+  tokenizer_path: "artifacts/tokenizer/fustercluck.model"
+  max_steps: 1000
+  seq_len: 3072
+  micro_batch_size: 1
+  gradient_accumulation: 64
+  precision: bf16
+  log_interval: 20
+  eval_interval: 200
+  checkpoint_dir: "artifacts/checkpoints/cloud/stage3"
+  grad_clip: 1.0
+  model_dim: 1024
+  model_layers: 24
+  model_heads: 16
+  model_kv_heads: 4
+  mlp_ratio: 4.0
+  rope_theta: 10000
+  dropout: 0.0
+  optimizer:
+    lr: 1.5e-4
+    betas: [0.9, 0.95]
+    weight_decay: 0.1
+    eps: 1e-8
+  vision_shards:
+    - "/workspace/datasets/vision/stage3/shard-{000000..000100}.tar"
+  shuffle_buffer: 1024
+  image_token: "<image>"
+  adapter:
+    fusion: "qformer"
+    num_queries: 64
+    train_backbone: false
+    image_size: 224
+
+stage4:
+  tokenizer_path: "artifacts/tokenizer/fustercluck.model"
+  max_steps: 1500
+  seq_len: 3072
+  micro_batch_size: 1
+  gradient_accumulation: 64
+  precision: bf16
+  log_interval: 20
+  eval_interval: 200
+  checkpoint_dir: "artifacts/checkpoints/cloud/stage4"
+  grad_clip: 1.0
+  model_dim: 1024
+  model_layers: 24
+  model_heads: 16
+  model_kv_heads: 4
+  mlp_ratio: 4.0
+  rope_theta: 10000
+  dropout: 0.0
+  optimizer:
+    lr: 1.0e-4
+    betas: [0.9, 0.95]
+    weight_decay: 0.1
+    eps: 1e-8
+  vision_shards:
+    - "/workspace/datasets/vision/stage4/shard-{000000..000150}.tar"
+  shuffle_buffer: 1024
+  image_token: "<image>"
+  adapter:
+    fusion: "qformer"
+    num_queries: 64
+    train_backbone: true
+    image_size: 224
+
 trainer:
   device: cuda
   use_compile: true

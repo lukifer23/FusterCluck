@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Dict, List, Optional
 
 
 @dataclass
@@ -54,5 +54,40 @@ class TrainerConfig:
     dataloader_workers: int = 0
     pin_memory: bool = False
     persistent_workers: bool = False
-    env: Optional[dict[str, str]] = None
+    env: Optional[Dict[str, str]] = None
     checkpoint: Optional[CheckpointConfig] = None
+
+
+@dataclass
+class VisionAdapterConfig:
+    fusion: str = "qformer"
+    num_queries: int = 64
+    train_backbone: bool = False
+    image_size: int = 224
+
+
+@dataclass
+class StageVisionConfig:
+    tokenizer_path: Path
+    max_steps: int
+    seq_len: int
+    micro_batch_size: int
+    gradient_accumulation: int
+    precision: str = "bf16"
+    log_interval: int = 100
+    eval_interval: int = 500
+    checkpoint_dir: Path = Path("artifacts/checkpoints/stage3")
+    grad_clip: float = 1.0
+    model_dim: int = 1024
+    model_layers: int = 24
+    model_heads: int = 16
+    model_kv_heads: int = 4
+    mlp_ratio: float = 4.0
+    rope_theta: int = 10000
+    dropout: float = 0.0
+    optimizer: OptimizerConfig = field(default_factory=OptimizerConfig)
+    vision_shards: List[str] = field(default_factory=list)
+    shuffle_buffer: int = 2048
+    image_token: str = "<image>"
+    image_token_id: Optional[int] = None
+    adapter: VisionAdapterConfig = field(default_factory=VisionAdapterConfig)

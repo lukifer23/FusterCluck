@@ -21,13 +21,24 @@ class CheckpointManager:
         checkpoints = sorted(self.directory.glob("step-*.pt"), key=lambda p: p.stat().st_mtime)
         return checkpoints[-1] if checkpoints else None
 
-    def save(self, step: int, model: torch.nn.Module, optimizer: torch.optim.Optimizer, **metadata: Any) -> Path:
+    def save(
+        self,
+        step: int,
+        model: torch.nn.Module,
+        optimizer: torch.optim.Optimizer,
+        *,
+        extra: dict[str, Any] | None = None,
+        **metadata: Any,
+    ) -> Path:
         path = self.directory / f"step-{step:07d}.pt"
-        torch.save({
+        payload: dict[str, Any] = {
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "metadata": metadata,
-        }, path)
+        }
+        if extra:
+            payload.update(extra)
+        torch.save(payload, path)
         self._write_manifest(path, metadata)
         self._prune()
         return path
