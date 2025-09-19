@@ -42,21 +42,34 @@ def scale_up_to_target():
     print(f"📊 Target samples for 2B tokens: {target_samples:,.0f}")
     print(f"📊 Expansion factor needed: {expansion_factor}x")
     
-    # Create expanded Stage 1
+    # Create expanded Stage 1 with progress tracking
     print("🔄 Creating expanded Stage 1...")
     expanded_stage1 = []
-    for _ in range(expansion_factor):
+    
+    # Show progress for expansion
+    from tqdm import tqdm
+    for i in tqdm(range(expansion_factor), desc="📈 Expanding Stage 1", unit="cycles"):
         expanded_stage1.extend(original_lines)
+        if (i + 1) % 5 == 0:  # Update every 5 cycles
+            print(f"  📊 Progress: {len(expanded_stage1):,} samples, ~{len(expanded_stage1) * tokens_per_sample:,.0f} tokens")
     
     # Add random samples to reach exact target
     remaining_needed = int(target_samples) - len(expanded_stage1)
     if remaining_needed > 0:
+        print(f"🔄 Adding {remaining_needed:,} random samples to reach target...")
         expanded_stage1.extend(random.choices(original_lines, k=remaining_needed))
     
-    # Shuffle and save
+    # Shuffle and save with progress
+    print("🔄 Shuffling and saving Stage 1...")
     random.shuffle(expanded_stage1)
+    
+    print("💾 Writing Stage 1 file...")
     with open(stage1_file, 'w', encoding='utf-8') as f:
-        f.write('\n'.join(expanded_stage1))
+        # Write in chunks to show progress
+        chunk_size = 100000  # 100K lines per chunk
+        for i in tqdm(range(0, len(expanded_stage1), chunk_size), desc="💾 Writing Stage 1", unit="chunks"):
+            chunk = expanded_stage1[i:i+chunk_size]
+            f.write('\n'.join(chunk) + '\n')
     
     print(f"✅ Stage 1 expanded to {len(expanded_stage1):,} samples")
     print(f"📊 Estimated tokens: {len(expanded_stage1) * tokens_per_sample:,.0f}")
@@ -76,21 +89,33 @@ def scale_up_to_target():
         print(f"📊 Target Stage 2 samples for 5B tokens: {target_stage2_samples:,.0f}")
         print(f"📊 Stage 2 expansion factor: {stage2_expansion_factor}x")
         
-        # Create expanded Stage 2
+        # Create expanded Stage 2 with progress tracking
         print("🔄 Creating expanded Stage 2...")
         expanded_stage2 = []
-        for _ in range(stage2_expansion_factor):
+        
+        # Show progress for expansion
+        for i in tqdm(range(stage2_expansion_factor), desc="📈 Expanding Stage 2", unit="cycles"):
             expanded_stage2.extend(original_stage2_lines)
+            if (i + 1) % 5 == 0:  # Update every 5 cycles
+                print(f"  📊 Progress: {len(expanded_stage2):,} samples, ~{len(expanded_stage2) * tokens_per_sample:,.0f} tokens")
         
         # Add random samples to reach exact target
         remaining_stage2 = int(target_stage2_samples) - len(expanded_stage2)
         if remaining_stage2 > 0:
+            print(f"🔄 Adding {remaining_stage2:,} random samples to reach target...")
             expanded_stage2.extend(random.choices(original_stage2_lines, k=remaining_stage2))
         
-        # Shuffle and save
+        # Shuffle and save with progress
+        print("🔄 Shuffling and saving Stage 2...")
         random.shuffle(expanded_stage2)
+        
+        print("💾 Writing Stage 2 file...")
         with open(stage2_file, 'w', encoding='utf-8') as f:
-            f.write('\n'.join(expanded_stage2))
+            # Write in chunks to show progress
+            chunk_size = 100000  # 100K lines per chunk
+            for i in tqdm(range(0, len(expanded_stage2), chunk_size), desc="💾 Writing Stage 2", unit="chunks"):
+                chunk = expanded_stage2[i:i+chunk_size]
+                f.write('\n'.join(chunk) + '\n')
         
         print(f"✅ Stage 2 expanded to {len(expanded_stage2):,} samples")
         print(f"📊 Estimated tokens: {len(expanded_stage2) * tokens_per_sample:,.0f}")
