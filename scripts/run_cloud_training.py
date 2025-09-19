@@ -135,7 +135,7 @@ class CloudTrainer:
             log_interval=self.stage1_config.log_interval,
             eval_interval=self.stage1_config.eval_interval,
             checkpoint_dir=self.stage1_config.checkpoint_dir,
-            optimizer=type('obj', (object,), self.stage1_config.optimizer)()
+            optimizer=dict(self.stage1_config.optimizer)
         )
         
         trainer_cfg = TrainerConfig(
@@ -169,7 +169,7 @@ class CloudTrainer:
             log_interval=self.stage2_config.log_interval,
             eval_interval=self.stage2_config.eval_interval,
             checkpoint_dir=self.stage2_config.checkpoint_dir,
-            optimizer=type('obj', (object,), self.stage2_config.optimizer)()
+            optimizer=dict(self.stage2_config.optimizer)
         )
         
         trainer_cfg = TrainerConfig(
