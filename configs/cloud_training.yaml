@@ -181,27 +181,23 @@ data:
     minimum_chars: 32
     shuffle_buffer: 65536
     datasets:
-      - name: "HuggingFaceM4/RefinedWeb"
+      - name: "HuggingFaceFW/fineweb"
+        config: "sample-350BT"
         split: "train"
         text_field: "text"
-        sample_limit: 5000000
-        shuffle_buffer: 10000
-      - name: "allenai/dolma-science"
+        sample_limit: 4000000
+        shuffle_buffer: 20000
+      - name: "allenai/dolma"
+        config: "v1_7"
         split: "train"
         text_field: "text"
         sample_limit: 2000000
-        shuffle_buffer: 10000
-      - name: "allenai/dolma-code"
+        shuffle_buffer: 20000
+      - name: "EleutherAI/pile"
         split: "train"
         text_field: "text"
-        sample_limit: 1000000
-        shuffle_buffer: 10000
-      - name: "wikimedia/wikipedia"
-        config: "20231101.en"
-        split: "train"
-        text_field: "text"
-        sample_limit: 750000
-        shuffle_buffer: 8000
+        sample_limit: 1500000
+        shuffle_buffer: 12000
   stage2:
     tokenizer_path: "artifacts/tokenizer/fustercluck.model"
     output_prefix: "data/tokenized/cloud/stage2"
@@ -212,20 +208,22 @@ data:
       - name: "cerebras/SlimPajama-627B"
         split: "train"
         text_field: "text"
-        sample_limit: 8000000
+        sample_limit: 5000000
         shuffle_buffer: 20000
-      - name: "allenai/dolma-books"
+      - name: "HuggingFaceFW/fineweb"
+        config: "sample-350BT"
         split: "train"
         text_field: "text"
-        sample_limit: 4000000
+        sample_limit: 3000000
         shuffle_buffer: 20000
-      - name: "HuggingFaceM4/RefinedWeb"
+      - name: "allenai/dolma"
+        config: "v1_7"
         split: "train"
         text_field: "text"
-        sample_limit: 2000000
-        shuffle_buffer: 10000
-      - name: "projecteverest/m2d2"
+        sample_limit: 2500000
+        shuffle_buffer: 20000
+      - name: "EleutherAI/pile"
         split: "train"
         text_field: "text"
-        sample_limit: 1500000
-        shuffle_buffer: 8000
+        sample_limit: 2500000
+        shuffle_buffer: 15000
