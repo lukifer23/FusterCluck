@@ -1,0 +1,48 @@
+[build-system]
+requires = ["setuptools>=65", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fustercluck"
+version = "0.1.0"
+description = "FusterCluck-450 multimodal training stack for Apple Silicon"
+readme = "README.md"
+authors = [{name = "FusterCluck Team"}]
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.3.0",
+    "torchvision>=0.18.0",
+    "torchaudio>=2.3.0",
+    "sentencepiece>=0.1.99",
+    "numpy>=1.24",
+    "datasets>=2.19",
+    "webdataset>=0.2.86",
+    "omegaconf>=2.3",
+    "wandb>=0.16",
+    "tqdm>=4.66",
+    "pydantic>=2.6",
+    "rich>=13.7",
+    "Pillow>=10.3",
+    "transformers>=4.40",
+    "accelerate>=0.30",
+    "einops>=0.7",
+    "safetensors>=0.4"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+minversion = "7"
+addopts = "-ra"
+testpaths = ["tests"]
+
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+
+[tool.isort]
+profile = "black"
+line_length = 100
+known_first_party = ["fustercluck"]

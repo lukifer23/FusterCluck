@@ -1,0 +1,3 @@
+A/B test uplift was estimated with a Bayesian beta-binomial model to stabilize small-volume segments.
+Feature pipelines should emit structured metadata: dataset schema, freshness timestamp, lineage identifiers.
+Notebooks should log experiment metrics to MLflow with tags for dataset hash and git commit to keep audits reproducible.

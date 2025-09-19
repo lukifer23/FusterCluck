@@ -1,0 +1,2 @@
+Welcome to FusterCluck Labs. This project turns a compact multimodal model into a science-savvy assistant.
+Although the focus is technical, the model still needs friendly conversational skills.
