@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import random
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -51,7 +52,7 @@ class DatasetSpec:
             return raw
         if isinstance(raw, str):
             return cls.parse(raw)
-        if isinstance(raw, dict):
+        if isinstance(raw, Mapping):
             data = dict(raw)
             if "name" not in data or "split" not in data or "text_field" not in data:
                 raise ValueError(f"Dataset config requires name/split/text_field: {raw}")

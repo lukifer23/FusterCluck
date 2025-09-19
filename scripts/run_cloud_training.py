@@ -190,9 +190,11 @@ class CloudTrainer:
         if "datasets" not in stage_data_cfg:
             raise RuntimeError(f"data.{stage}.datasets must be provided")
 
-        dataset_specs = [
-            DatasetSpec.from_config(item) for item in stage_data_cfg.get("datasets")
-        ]
+        datasets_cfg = stage_data_cfg.get("datasets")
+        if datasets_cfg is None:
+            raise RuntimeError(f"data.{stage}.datasets must be provided")
+        dataset_entries = OmegaConf.to_container(datasets_cfg, resolve=True)
+        dataset_specs = [DatasetSpec.from_config(item) for item in dataset_entries]
 
         if stage == "stage1":
             dataset_path = Path(cfg.dataset_path)
