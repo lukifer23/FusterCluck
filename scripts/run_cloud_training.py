@@ -144,7 +144,7 @@ class CloudTrainer:
     def run_stage1(self):
         """Run Stage 1 training (2B tokens)."""
         logger.info("Starting Stage 1 training...")
-        
+
         # Convert config to dataclass with proper Path/optimizer types
         stage1_cfg = self._build_stage_config(self.stage1_config)
 
@@ -155,11 +155,13 @@ class CloudTrainer:
             compile_mode=self.trainer_config.compile_mode,
             precision=self.trainer_config.precision
         )
-        
+        if getattr(self.trainer_config, "env", None):
+            os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
+
         # Run training
         trainer = Stage0Trainer(stage1_cfg, trainer_cfg)
         trainer.train()
-        
+
         logger.info("Stage 1 training complete!")
         
     def run_stage2(self):
@@ -168,7 +170,7 @@ class CloudTrainer:
         
         # Similar to stage1 but with stage2 config
         stage2_cfg = self._build_stage_config(self.stage2_config)
-        
+
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
             grad_clip=self.stage2_config.grad_clip,
@@ -176,7 +178,9 @@ class CloudTrainer:
             compile_mode=self.trainer_config.compile_mode,
             precision=self.trainer_config.precision
         )
-        
+        if getattr(self.trainer_config, "env", None):
+            os.environ.update({k: str(v) for k, v in self.trainer_config.env.items()})
+
         # Run training
         trainer = Stage0Trainer(stage2_cfg, trainer_cfg)
         trainer.train()

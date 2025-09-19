@@ -12,9 +12,9 @@ stage1:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 4000
   seq_len: 4096
-  micro_batch_size: 8
-  gradient_accumulation: 16
-  effective_batch_size: 524288  # 4096 * 8 * 16
+  micro_batch_size: 4
+  gradient_accumulation: 32
+  effective_batch_size: 524288  # 4096 * 4 * 32
   precision: bf16
   log_interval: 50
   eval_interval: 500
@@ -45,8 +45,8 @@ stage2:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 10000
   seq_len: 4096
-  micro_batch_size: 8
-  gradient_accumulation: 16
+  micro_batch_size: 4
+  gradient_accumulation: 32
   effective_batch_size: 524288
   precision: bf16
   log_interval: 50
@@ -81,6 +81,10 @@ trainer:
   dataloader_workers: 8
   pin_memory: true
   persistent_workers: true
+  env:
+    PYTORCH_CUDA_ALLOC_CONF: "expandable_segments:True"
+    TORCH_CUDA_FUSER_DISABLE: "1"
+    TORCHINDUCTOR_MAX_AUTOTUNE_GEMM_TUNERS: "0"
   checkpoint:
     directory: "artifacts/checkpoints/cloud"
     keep_last: 10
