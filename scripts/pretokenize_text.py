@@ -22,12 +22,21 @@ def iter_corpus(paths: Iterable[Path]) -> Iterator[str]:
                 yield line.strip()
 
 
+def count_lines(paths: list[Path]) -> int:
+    """Count total lines across all input files."""
+    total_lines = 0
+    for path in paths:
+        with path.open("r", encoding="utf-8", errors="ignore") as f:
+            total_lines += sum(1 for _ in f)
+    return total_lines
+
 def encode_corpus(
     processor: spm.SentencePieceProcessor,
     text_iter: Iterable[str],
     output_prefix: Path,
     *,
     minimum_chars: int = 1,
+    total_lines: int = None,
 ) -> tuple[int, int]:
     bin_path = output_prefix.with_suffix(".bin")
     idx_path = output_prefix.with_suffix(".idx")
@@ -41,9 +50,24 @@ def encode_corpus(
     total_sequences = 0
     offset_bytes = 0
 
+    print(f"🔤 Starting tokenization...")
+    print(f"📁 Output: {bin_path}")
+    print(f"📊 Target: {total_lines:,} lines" if total_lines else "📊 Processing all lines")
+
     with bin_path.open("wb") as bin_handle, idx_path.open("wb") as idx_handle:
         idx_handle.write(np.asarray([0], dtype=np.int64).tobytes())
-        for line in tqdm(text_iter, desc="encoding", unit="lines"):
+        
+        # Create progress bar with total if available
+        progress_bar = tqdm(
+            text_iter, 
+            desc="🔤 Tokenizing", 
+            unit="lines",
+            total=total_lines,
+            unit_scale=True,
+            ncols=100
+        )
+        
+        for line in progress_bar:
             if len(line) < minimum_chars:
                 continue
             pieces = processor.EncodeAsIds(line)
@@ -56,6 +80,20 @@ def encode_corpus(
             idx_handle.write(np.asarray([offset_bytes], dtype=np.int64).tobytes())
             total_tokens += arr.size
             total_sequences += 1
+            
+            # Update progress bar description with current stats
+            if total_sequences % 10000 == 0:  # Update every 10k sequences
+                progress_bar.set_description(
+                    f"🔤 Tokenizing ({total_sequences:,} seq, {total_tokens:,} tokens)"
+                )
+
+    print(f"✅ Tokenization complete!")
+    print(f"📊 Total sequences: {total_sequences:,}")
+    print(f"📊 Total tokens: {total_tokens:,}")
+    print(f"📊 Average tokens per sequence: {total_tokens/total_sequences:.1f}" if total_sequences > 0 else "📊 No sequences processed")
+    print(f"📁 Output files:")
+    print(f"  - {bin_path} ({bin_path.stat().st_size / (1024**3):.2f} GB)")
+    print(f"  - {idx_path}")
 
     return total_tokens, total_sequences
 
@@ -77,15 +115,32 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="[%(levelname)s] %(message)s")
+    
+    print(f"🚀 Starting tokenization process...")
+    print(f"📁 Tokenizer: {args.tokenizer}")
+    print(f"📁 Output prefix: {args.output}")
+    print(f"📁 Input files: {len(args.corpus)} files")
+    
+    # Count total lines for progress bar
+    print(f"🔍 Counting lines in input files...")
+    total_lines = count_lines(args.corpus)
+    print(f"📊 Total lines to process: {total_lines:,}")
+    
     processor = spm.SentencePieceProcessor()
     if not processor.Load(str(args.tokenizer)):
         raise RuntimeError(f"Failed to load SentencePiece model: {args.tokenizer}")
+    
+    print(f"✅ Tokenizer loaded successfully")
+    
     tokens, sequences = encode_corpus(
         processor,
         iter_corpus(args.corpus),
         args.output,
         minimum_chars=args.min_chars,
+        total_lines=total_lines,
     )
+    
+    print(f"🎉 Tokenization complete!")
     LOGGER.info(
         "Wrote %s and %s (%d tokens across %d sequences)",
         args.output.with_suffix(".bin"),
