@@ -6,7 +6,7 @@ import logging
 import os
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, Iterable
 
 import torch
 import yaml
@@ -72,10 +72,17 @@ class CloudTrainer:
         logger.info("Downloading and processing data...")
         
         # Download data
-        os.system("python scripts/download_data.py --datasets refinedweb science --output-dir data/raw/cloud")
+        os.system(
+            "python scripts/download_data.py --domains science data code chess general --output-dir data/raw/cloud"
+        )
         
         # Process data
-        os.system("python scripts/process_cloud_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud")
+        os.system(
+            "python scripts/process_cloud_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud"
+        )
+
+        processed_dir = Path("data/processed/cloud")
+        self._build_stage_shards(processed_dir)
         
         # Build tokenizer if not exists
         if not Path("artifacts/tokenizer/fustercluck.model").exists():
@@ -84,8 +91,32 @@ class CloudTrainer:
         
         # Tokenize data
         logger.info("Tokenizing data...")
-        os.system(f"python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model data/tokenized/cloud/stage1 data/processed/cloud/refinedweb_processed.txt")
-        os.system(f"python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model data/tokenized/cloud/stage2 data/processed/cloud/science_processed.txt")
+        os.system(
+            "python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model "
+            "data/tokenized/cloud/stage1 data/processed/cloud/stage1_mix.txt"
+        )
+        os.system(
+            "python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model "
+            "data/tokenized/cloud/stage2 data/processed/cloud/stage2_mix.txt"
+        )
+
+    def _build_stage_shards(self, processed_dir: Path) -> None:
+        """Combine processed domain files into stage-level text shards."""
+
+        def concat(domains: Iterable[str], output_name: str) -> None:
+            output_path = processed_dir / output_name
+            with output_path.open("w", encoding="utf-8") as handle:
+                for domain in domains:
+                    domain_path = processed_dir / f"{domain}_processed.txt"
+                    if not domain_path.exists():
+                        logger.warning("Missing processed slice %s", domain_path)
+                        continue
+                    handle.write(domain_path.read_text(encoding="utf-8"))
+                    handle.write("\n")
+            logger.info("Wrote %s", output_path)
+
+        concat(["science", "data", "code"], "stage1_mix.txt")
+        concat(["science", "data", "code", "chess", "general"], "stage2_mix.txt")
         
     def run_stage1(self):
         """Run Stage 1 training (2B tokens)."""
