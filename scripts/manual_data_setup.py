@@ -17,33 +17,31 @@ def setup_manual_data():
     print("📥 Downloading domain data...")
     os.system("python scripts/download_data.py --domains science data code chess general --output-dir data/raw/cloud")
     
-    # Process the data
-    print("🔄 Processing data...")
-    os.system("python scripts/process_cloud_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud --target-tokens 100000000")
+    # Process the data with proper domain weighting
+    print("🔄 Processing data with domain weighting...")
+    os.system("python scripts/process_weighted_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud --target-tokens 100000000 --stage both")
     
-    # Check if processing created mix.txt
-    mix_file = Path("data/processed/cloud/mix.txt")
-    if mix_file.exists():
-        print("✅ Processing successful!")
-        
-        # Copy to stage files
-        stage1_file = Path("data/processed/cloud/stage1_mix.txt")
-        stage2_file = Path("data/processed/cloud/stage2_mix.txt")
-        
-        shutil.copy(mix_file, stage1_file)
-        shutil.copy(mix_file, stage2_file)
+    # Check if processing created stage files
+    stage1_file = Path("data/processed/cloud/stage1_mix.txt")
+    stage2_file = Path("data/processed/cloud/stage2_mix.txt")
+    
+    if stage1_file.exists() and stage2_file.exists():
+        print("✅ Weighted processing successful!")
         
         # Count samples
         with open(stage1_file, 'r') as f:
-            count = sum(1 for _ in f)
+            stage1_count = sum(1 for _ in f)
+        with open(stage2_file, 'r') as f:
+            stage2_count = sum(1 for _ in f)
         
-        print(f"📊 Created stage files with {count:,} samples each")
+        print(f"📊 Stage 1: {stage1_count:,} samples (weighted mix)")
+        print(f"📊 Stage 2: {stage2_count:,} samples (weighted mix)")
         print(f"📁 Stage 1: {stage1_file}")
         print(f"📁 Stage 2: {stage2_file}")
         
         return True
     else:
-        print("❌ Processing failed - no mix.txt created")
+        print("❌ Processing failed - no stage files created")
         return False
 
 def main():
