@@ -27,9 +27,11 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        norm = x.norm(2, dim=-1, keepdim=True)
-        rms = norm * (1.0 / math.sqrt(x.size(-1)))
-        x_norm = x / torch.maximum(rms, torch.tensor(self.eps, device=x.device, dtype=x.dtype))
+        # Compute RMS norm with numerical stability
+        # Use torch operations for better gradient flow and numerical stability
+        norm_squared = torch.sum(x * x, dim=-1, keepdim=True)
+        rms = torch.sqrt(norm_squared / x.size(-1) + self.eps)
+        x_norm = x / rms
         return self.weight * x_norm
 
 
