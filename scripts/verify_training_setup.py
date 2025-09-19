@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Verify that training data is properly set up and integrated."""
 
-import os
-import sys
 from pathlib import Path
+
+from fustercluck.data.corpus_builder import token_count_from_idx
 
 def check_file_exists_and_size(file_path: Path, description: str) -> bool:
     """Check if file exists and report its size."""
@@ -16,17 +16,18 @@ def check_file_exists_and_size(file_path: Path, description: str) -> bool:
         print(f"❌ {description}: {file_path} (MISSING)")
         return False
 
-def count_lines(file_path: Path, description: str) -> int:
-    """Count lines in a file."""
-    if not file_path.exists():
-        print(f"❌ {description}: File not found")
+def report_token_count(idx_path: Path, description: str) -> int:
+    """Report true token counts from idx files."""
+    if not idx_path.exists():
+        print(f"❌ {description}: {idx_path} (MISSING)")
         return 0
-    
-    with open(file_path, 'r') as f:
-        count = sum(1 for _ in f)
-    
-    print(f"📊 {description}: {count:,} lines")
-    return count
+    try:
+        tokens = token_count_from_idx(idx_path)
+    except Exception as exc:  # pragma: no cover - defensive
+        print(f"❌ {description}: failed to inspect {idx_path} ({exc})")
+        return 0
+    print(f"📊 {description}: {tokens:,} tokens")
+    return tokens
 
 def verify_data_pipeline():
     """Verify the complete data pipeline."""
@@ -39,17 +40,7 @@ def verify_data_pipeline():
     
     stage1_exists = check_file_exists_and_size(stage1_raw, "Stage 1 raw text")
     stage2_exists = check_file_exists_and_size(stage2_raw, "Stage 2 raw text")
-    
-    if stage1_exists and stage2_exists:
-        stage1_lines = count_lines(stage1_raw, "Stage 1 samples")
-        stage2_lines = count_lines(stage2_raw, "Stage 2 samples")
-        total_lines = stage1_lines + stage2_lines
-        
-        # Estimate tokens (rough: 250 tokens per sample)
-        estimated_tokens = total_lines * 250
-        print(f"📊 Total estimated tokens: {estimated_tokens:,}")
-        print(f"🎯 7B token target: {'✅ ACHIEVED' if estimated_tokens >= 7000000000 else '❌ MISSED'}\n")
-    
+
     # 2. Check tokenizer
     print("2️⃣ Checking tokenizer:")
     tokenizer_file = Path("artifacts/tokenizer/fustercluck.model")
@@ -62,15 +53,24 @@ def verify_data_pipeline():
     stage1_index = Path("data/tokenized/cloud/stage1.idx")
     stage2_tokenized = Path("data/tokenized/cloud/stage2.bin")
     stage2_index = Path("data/tokenized/cloud/stage2.idx")
-    
+
     stage1_tokenized_exists = check_file_exists_and_size(stage1_tokenized, "Stage 1 tokenized")
-    stage1_index_exists = check_file_exists_and_size(stage1_index, "Stage 1 index")
     stage2_tokenized_exists = check_file_exists_and_size(stage2_tokenized, "Stage 2 tokenized")
-    stage2_index_exists = check_file_exists_and_size(stage2_index, "Stage 2 index")
-    
-    tokenized_ready = all([stage1_tokenized_exists, stage1_index_exists, 
-                          stage2_tokenized_exists, stage2_index_exists])
-    print()
+    stage1_tokens = report_token_count(stage1_index, "Stage 1 token count")
+    stage2_tokens = report_token_count(stage2_index, "Stage 2 token count")
+
+    tokenized_ready = all([
+        stage1_tokenized_exists,
+        stage2_tokenized_exists,
+        stage1_tokens > 0,
+        stage2_tokens > 0,
+    ])
+    if tokenized_ready:
+        total_tokens = stage1_tokens + stage2_tokens
+        print(f"🎯 Combined tokens: {total_tokens:,}")
+        print(f"   Target 7B tokens: {'✅ ACHIEVED' if total_tokens >= 7_000_000_000 else '⚠️ SHORT'}\n")
+    else:
+        print()
     
     # 4. Check training config
     print("4️⃣ Checking training configuration:")
@@ -98,23 +98,15 @@ def verify_data_pipeline():
     # 6. Summary and recommendations
     print("📋 SUMMARY:")
     
-    if stage1_exists and stage2_exists and tokenizer_exists:
-        print("✅ Raw data and tokenizer are ready")
-        
-        if not tokenized_ready:
-            print("⚠️  Tokenized data is missing - need to run tokenization")
-            print("📋 Next step:")
-            print("   python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model data/tokenized/cloud/stage1 data/processed/cloud/stage1_mix.txt")
-            print("   python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model data/tokenized/cloud/stage2 data/processed/cloud/stage2_mix.txt")
-        else:
-            print("✅ Tokenized data is ready")
-            print("🚀 Ready to start training!")
-            print("📋 Next step:")
-            print("   python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --skip-data --resume")
-    else:
-        print("❌ Missing required files - need to run data setup first")
+    if stage1_exists and stage2_exists and tokenizer_exists and tokenized_ready:
+        print("✅ Raw corpora, tokenizer, and tokenized shards look good")
+        print("🚀 Ready to launch training")
         print("📋 Next step:")
-        print("   python scripts/simple_scale_up.py")
+        print("   export HF_TOKEN=your_hf_token && python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --resume")
+    else:
+        print("❌ Setup incomplete – one or more prerequisites missing")
+        print("📋 Next step:")
+        print("   export HF_TOKEN=your_hf_token && python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --resume")
     
     print()
     return tokenized_ready

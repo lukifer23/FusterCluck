@@ -1,118 +1,135 @@
 #!/usr/bin/env python3
-"""Download real 7B token datasets with proper error handling and compression support."""
+"""Materialize production Stage 1/2 corpora directly from Hugging Face."""
 
+from __future__ import annotations
+
+import argparse
 import os
-import sys
 from pathlib import Path
+from typing import Iterable
 
-def install_dependencies():
-    """Install required dependencies for dataset downloading."""
-    print("🔧 Installing required dependencies...")
-    os.system("pip install zstandard py7zr")
-    print("✅ Dependencies installed")
+from omegaconf import OmegaConf
 
-def download_stage1_data():
-    """Download Stage 1 datasets (2B tokens)."""
-    print("📥 Downloading Stage 1 datasets (2B tokens)...")
-    
-    # HF token should be set via environment variable
-    if not os.environ.get('HF_TOKEN'):
-        print("❌ HF_TOKEN environment variable not set!")
-        print("Run: export HF_TOKEN=your_token_here")
-        return False
-    
-    # Try working datasets in order of preference
-    datasets_to_try = [
-        # Working alternatives that don't require compression
-        "openwebtext:train:text:1000000",
-        "allenai/dolma-science:train:text:1000000", 
-        "wikimedia/wikipedia:20231101.en:train:text:500000",
-        
-        # If RefinedWeb works with proper compression
-        "huggingface/RefinedWeb:train:text:1000000",
-    ]
-    
-    output_file = Path("data/processed/cloud/stage1_mix.txt")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    total_samples = 0
-    for dataset_spec in datasets_to_try:
-        try:
-            print(f"🔄 Trying dataset: {dataset_spec}")
-            cmd = f'python scripts/download_hf_corpus.py --dataset {dataset_spec} --output {output_file}'
-            result = os.system(cmd)
-            if result == 0:
-                print(f"✅ Successfully downloaded: {dataset_spec}")
-                # Count samples
-                with open(output_file, 'r') as f:
-                    total_samples = sum(1 for _ in f)
-                print(f"📊 Total samples in stage1: {total_samples:,}")
-                break
-            else:
-                print(f"❌ Failed: {dataset_spec}")
-        except Exception as e:
-            print(f"❌ Error with {dataset_spec}: {e}")
-    
-    return total_samples > 0
+from fustercluck.data.corpus_builder import (
+    DatasetSpec,
+    materialize_tokenized_corpus,
+    token_count_from_idx,
+)
 
-def download_stage2_data():
-    """Download Stage 2 datasets (5B tokens)."""
-    print("📥 Downloading Stage 2 datasets (5B tokens)...")
-    
-    datasets_to_try = [
-        # Working alternatives
-        "cerebras/SlimPajama-627B:train:text:2000000",
-        "allenai/dolma-books:train:text:1000000",
-        "wikimedia/wikipedia:20231101.en:train:text:1000000",
-    ]
-    
-    output_file = Path("data/processed/cloud/stage2_mix.txt")
-    output_file.parent.mkdir(parents=True, exist_ok=True)
-    
-    total_samples = 0
-    for dataset_spec in datasets_to_try:
-        try:
-            print(f"🔄 Trying dataset: {dataset_spec}")
-            cmd = f'python scripts/download_hf_corpus.py --dataset {dataset_spec} --output {output_file}'
-            result = os.system(cmd)
-            if result == 0:
-                print(f"✅ Successfully downloaded: {dataset_spec}")
-                # Count samples
-                with open(output_file, 'r') as f:
-                    total_samples = sum(1 for _ in f)
-                print(f"📊 Total samples in stage2: {total_samples:,}")
-                break
-            else:
-                print(f"❌ Failed: {dataset_spec}")
-        except Exception as e:
-            print(f"❌ Error with {dataset_spec}: {e}")
-    
-    return total_samples > 0
 
-def main():
-    """Main download function."""
-    print("🚀 Starting real dataset download for 7B token training...")
-    
-    # Install dependencies
-    install_dependencies()
-    
-    # Create directories
-    os.makedirs("data/processed/cloud", exist_ok=True)
-    os.makedirs("data/tokenized/cloud", exist_ok=True)
-    
-    # Download datasets
-    stage1_success = download_stage1_data()
-    stage2_success = download_stage2_data()
-    
-    if stage1_success and stage2_success:
-        print("🎉 Successfully downloaded all datasets!")
-        print("📋 Next steps:")
-        print("1. Process the data: python scripts/process_cloud_data.py --input-dir data/processed/cloud --output-dir data/processed/cloud")
-        print("2. Retokenize: python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model data/tokenized/cloud/stage1 data/processed/cloud/stage1_mix.txt")
-        print("3. Start training: python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --skip-data --resume")
+def ensure_token(token_env: str) -> str:
+    token = os.getenv(token_env)
+    if not token:
+        raise RuntimeError(
+            f"Environment variable {token_env} is not set. Export your Hugging Face token before running."
+        )
+    return token
+
+
+def prepare_stage(
+    stage_name: str,
+    stage_cfg,
+    data_cfg,
+    hf_token: str,
+    overwrite: bool,
+) -> None:
+    if stage_name not in data_cfg:
+        raise RuntimeError(f"data.{stage_name} section missing from configuration")
+    stage_data_cfg = data_cfg[stage_name]
+    if "datasets" not in stage_data_cfg:
+        raise RuntimeError(f"data.{stage_name}.datasets must be provided")
+
+    dataset_specs = [DatasetSpec.from_config(entry) for entry in stage_data_cfg.datasets]
+    if not dataset_specs:
+        raise RuntimeError(f"data.{stage_name}.datasets is empty")
+
+    output_prefix = Path(stage_data_cfg.get("output_prefix", stage_cfg.dataset_path)).expanduser()
+    tokenizer_path = Path(stage_data_cfg.get("tokenizer_path", stage_cfg.tokenizer_path)).expanduser()
+
+    target_tokens = stage_data_cfg.get("target_tokens")
+    if target_tokens is not None:
+        target_tokens = int(target_tokens)
+
+    minimum_chars = int(stage_data_cfg.get("minimum_chars", 16))
+    shuffle_buffer = int(stage_data_cfg.get("shuffle_buffer", 65536))
+
+    stats = materialize_tokenized_corpus(
+        tokenizer_path=tokenizer_path,
+        specs=dataset_specs,
+        output_prefix=output_prefix,
+        hf_token=hf_token,
+        target_tokens=target_tokens,
+        minimum_chars=minimum_chars,
+        shuffle_buffer=shuffle_buffer,
+        overwrite=overwrite,
+    )
+
+    bin_path = output_prefix.with_suffix(".bin")
+    idx_path = output_prefix.with_suffix(".idx")
+    dataset_path = Path(stage_cfg.dataset_path).expanduser()
+    idx_target = Path(stage_cfg.idx_path).expanduser()
+    dataset_path.parent.mkdir(parents=True, exist_ok=True)
+    idx_target.parent.mkdir(parents=True, exist_ok=True)
+
+    if bin_path.resolve() != dataset_path.resolve():
+        if dataset_path.exists():
+            dataset_path.unlink()
+        dataset_path.symlink_to(bin_path.resolve())
+    if idx_path.resolve() != idx_target.resolve():
+        if idx_target.exists():
+            idx_target.unlink()
+        idx_target.symlink_to(idx_path.resolve())
+
+    tokens = token_count_from_idx(idx_path)
+    print(
+        f"✅ {stage_name} ready: {tokens:,} tokens across {stats['totals']['sequences']:,} sequences → {bin_path}"
+    )
+
+
+def materialize(args) -> None:
+    config = OmegaConf.load(args.config)
+    if "data" not in config:
+        raise RuntimeError("configs/cloud_training.yaml is missing a top-level data section")
+
+    stages: Iterable[str]
+    if args.stage == "both":
+        stages = ("stage1", "stage2")
     else:
-        print("❌ Some datasets failed to download. Check the errors above.")
-        sys.exit(1)
+        stages = (f"stage{args.stage}",)
+
+    hf_token = ensure_token(config.data.get("hf_token_env", "HF_TOKEN"))
+
+    for stage_name in stages:
+        stage_cfg = getattr(config, stage_name)
+        prepare_stage(stage_name, stage_cfg, config.data, hf_token, overwrite=args.overwrite)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/cloud_training.yaml"),
+        help="Configuration file defining dataset mixes",
+    )
+    parser.add_argument(
+        "--stage",
+        choices=["1", "2", "both"],
+        default="both",
+        help="Which stage(s) to materialize",
+    )
+    parser.add_argument(
+        "--overwrite",
+        action="store_true",
+        help="Rebuild corpora even if existing tokenized shards meet the target",
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    materialize(args)
+
 
 if __name__ == "__main__":
     main()
