@@ -5,11 +5,17 @@ set -e
 
 echo "Setting up FusterCluck cloud training environment..."
 
+if command -v sudo >/dev/null 2>&1; then
+    SUDO="sudo"
+else
+    SUDO=""
+fi
+
 # Update system
-sudo apt update && sudo apt upgrade -y
+$SUDO apt update && $SUDO apt upgrade -y
 
 # Install system dependencies
-sudo apt install -y \
+$SUDO apt install -y \
     git \
     curl \
     wget \
@@ -27,9 +33,9 @@ sudo apt install -y \
 if ! command -v nvcc &> /dev/null; then
     echo "Installing CUDA toolkit..."
     wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
-    sudo dpkg -i cuda-keyring_1.0-1_all.deb
-    sudo apt update
-    sudo apt install -y cuda-toolkit-12-1
+    $SUDO dpkg -i cuda-keyring_1.0-1_all.deb
+    $SUDO apt update
+    $SUDO apt install -y cuda-toolkit-12-1
 fi
 
 # Clone repository
