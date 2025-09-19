@@ -193,11 +193,13 @@ data:
         text_field: "text"
         sample_limit: 2000000
         shuffle_buffer: 20000
+        trust_remote_code: true
       - name: "EleutherAI/pile"
         split: "train"
         text_field: "text"
         sample_limit: 1500000
         shuffle_buffer: 12000
+        trust_remote_code: true
   stage2:
     tokenizer_path: "artifacts/tokenizer/fustercluck.model"
     output_prefix: "data/tokenized/cloud/stage2"
@@ -210,6 +212,7 @@ data:
         text_field: "text"
         sample_limit: 5000000
         shuffle_buffer: 20000
+        trust_remote_code: true
       - name: "HuggingFaceFW/fineweb"
         config: "sample-350BT"
         split: "train"
@@ -222,8 +225,10 @@ data:
         text_field: "text"
         sample_limit: 2500000
         shuffle_buffer: 20000
+        trust_remote_code: true
       - name: "EleutherAI/pile"
         split: "train"
         text_field: "text"
         sample_limit: 2500000
         shuffle_buffer: 15000
+        trust_remote_code: true

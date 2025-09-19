@@ -25,6 +25,7 @@ class DatasetSpec:
     text_field: str
     sample_limit: Optional[int] = None
     shuffle_buffer: Optional[int] = None
+    trust_remote_code: bool = False
 
     @classmethod
     def parse(cls, raw: str) -> "DatasetSpec":
@@ -69,6 +70,7 @@ class DatasetSpec:
                 text_field=str(data["text_field"]),
                 sample_limit=sample_limit,
                 shuffle_buffer=shuffle_buffer,
+                trust_remote_code=bool(data.get("trust_remote_code", False)),
             )
         raise TypeError(f"Unsupported dataset spec type: {type(raw)!r}")
 
@@ -105,6 +107,7 @@ def stream_dataset(spec: DatasetSpec, hf_token: Optional[str]) -> Iterator[str]:
         split=spec.split,
         streaming=True,
         token=hf_token,
+        trust_remote_code=spec.trust_remote_code,
     )
     if spec.shuffle_buffer:
         dataset = dataset.shuffle(buffer_size=spec.shuffle_buffer, seed=42)
