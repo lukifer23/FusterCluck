@@ -5,8 +5,10 @@ import argparse
 import logging
 import os
 import time
+import glob
+import re
 from pathlib import Path
-from typing import Iterable
+from typing import Sequence
 
 from omegaconf import OmegaConf
 
@@ -19,6 +21,11 @@ from fustercluck.train.config import (
     VisionAdapterConfig,
 )
 from fustercluck.train.stage_multimodal import StageMultimodalTrainer
+from fustercluck.data.corpus_builder import (
+    DatasetSpec,
+    materialize_tokenized_corpus,
+    token_count_from_idx,
+)
 
 # Set up logging
 LOG_DIR = Path("logs")
@@ -41,6 +48,7 @@ class CloudTrainer:
         self.stage1_config = self.config.stage1
         self.stage2_config = self.config.stage2
         self.trainer_config = self.config.trainer
+        self.data_config = getattr(self.config, "data", None)
         
         # Set up directories
         self.setup_directories()
@@ -75,10 +83,55 @@ class CloudTrainer:
             optimizer=optimizer_cfg,
         )
 
-    def _build_vision_config(self, cfg) -> StageVisionConfig:
+    def _expand_braces(self, pattern: str) -> list[str]:
+        brace_re = re.compile(r"\{(\d+)\.\.(\d+)\}")
+
+        match = brace_re.search(pattern)
+        if not match:
+            return [pattern]
+        start, end = int(match.group(1)), int(match.group(2))
+        if end < start:
+            start, end = end, start
+        width = max(len(match.group(1)), len(match.group(2)))
+        expanded: list[str] = []
+        for value in range(start, end + 1):
+            replacement = f"{value:0{width}d}"
+            replaced = pattern[: match.start()] + replacement + pattern[match.end():]
+            expanded.extend(self._expand_braces(replaced))
+        return expanded
+
+    def _resolve_vision_shards(self, stage: str, patterns: Sequence[str]) -> list[str]:
+        resolved: list[str] = []
+        seen: set[str] = set()
+        for pattern in patterns:
+            expanded_env = os.path.expanduser(os.path.expandvars(pattern))
+            candidates = self._expand_braces(expanded_env)
+            matched = False
+            for candidate in candidates:
+                matches = sorted(glob.glob(candidate))
+                if not matches:
+                    continue
+                matched = True
+                for match_path in matches:
+                    resolved_path = str(Path(match_path).resolve())
+                    if resolved_path not in seen:
+                        seen.add(resolved_path)
+                        resolved.append(resolved_path)
+            if not matched:
+                logger.warning("%s: pattern %s produced no matches", stage, expanded_env)
+
+        if not resolved:
+            raise RuntimeError(f"No vision shards found for {stage}. Patterns={list(patterns)}")
+
+        logger.info("%s resolved to %d vision shards", stage, len(resolved))
+        return resolved
+
+    def _build_vision_config(self, cfg, stage: str) -> StageVisionConfig:
         params = OmegaConf.to_container(cfg, resolve=True)
         optimizer_cfg = OptimizerConfig(**params.get("optimizer", {}))
         adapter_cfg = VisionAdapterConfig(**params.get("adapter", {}))
+        shards = params.get("vision_shards", [])
+        resolved_shards = self._resolve_vision_shards(stage, shards)
         return StageVisionConfig(
             tokenizer_path=Path(params["tokenizer_path"]),
             max_steps=int(params.get("max_steps", 1000)),
@@ -97,7 +150,7 @@ class CloudTrainer:
             rope_theta=int(params.get("rope_theta", 10000)),
             dropout=float(params.get("dropout", 0.0)),
             optimizer=optimizer_cfg,
-            vision_shards=params.get("vision_shards", []),
+            vision_shards=resolved_shards,
             shuffle_buffer=int(params.get("shuffle_buffer", 2048)),
             image_token=params.get("image_token", "<image>"),
             image_token_id=params.get("image_token_id"),
@@ -129,57 +182,115 @@ class CloudTrainer:
                 config=OmegaConf.to_container(self.config, resolve=True)
             )
             
+    def _prepare_stage_text(self, stage: str, cfg) -> None:
+        if not self.data_config or stage not in self.data_config:
+            raise RuntimeError(f"data.{stage} configuration missing from YAML")
+
+        stage_data_cfg = self.data_config[stage]
+        if "datasets" not in stage_data_cfg:
+            raise RuntimeError(f"data.{stage}.datasets must be provided")
+
+        dataset_specs = [
+            DatasetSpec.from_config(item) for item in stage_data_cfg.get("datasets")
+        ]
+
+        if stage == "stage1":
+            dataset_path = Path(cfg.dataset_path)
+            idx_path = Path(cfg.idx_path)
+        elif stage == "stage2":
+            dataset_path = Path(cfg.dataset_path)
+            idx_path = Path(cfg.idx_path)
+        else:
+            raise ValueError(f"Unsupported text stage: {stage}")
+
+        output_prefix = Path(stage_data_cfg.get("output_prefix", dataset_path.with_suffix("")))
+        tokenizer_path = Path(stage_data_cfg.get("tokenizer_path", cfg.tokenizer_path))
+
+        target_tokens = stage_data_cfg.get("target_tokens")
+        if target_tokens is not None:
+            target_tokens = int(target_tokens)
+        minimum_chars = int(stage_data_cfg.get("minimum_chars", 16))
+        shuffle_buffer = int(stage_data_cfg.get("shuffle_buffer", 8192))
+        overwrite = bool(stage_data_cfg.get("overwrite", False))
+
+        hf_token_env = stage_data_cfg.get(
+            "hf_token_env", self.data_config.get("hf_token_env", "HF_TOKEN")
+        )
+        hf_token = os.getenv(hf_token_env)
+        if not hf_token:
+            raise RuntimeError(
+                f"Environment variable {hf_token_env} is not set; required for {stage} data"
+            )
+
+        bin_path = output_prefix.with_suffix(".bin")
+        idx_out_path = output_prefix.with_suffix(".idx")
+
+        if not overwrite and bin_path.exists() and idx_out_path.exists():
+            try:
+                existing_tokens = token_count_from_idx(idx_out_path)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to inspect existing idx file %s: %s", idx_out_path, exc)
+                existing_tokens = 0
+            if target_tokens is None or existing_tokens >= target_tokens:
+                logger.info(
+                    "%s corpus already materialized (%d tokens) – reusing %s",
+                    stage,
+                    existing_tokens,
+                    bin_path,
+                )
+                return
+            logger.info(
+                "%s corpus has %d tokens (<%s target). Rebuilding with overwrite.",
+                stage,
+                existing_tokens,
+                target_tokens,
+            )
+            overwrite = True
+
+        logger.info(
+            "Materializing %s corpus to %s (target_tokens=%s, datasets=%d)",
+            stage,
+            output_prefix,
+            target_tokens,
+            len(dataset_specs),
+        )
+
+        stats = materialize_tokenized_corpus(
+            tokenizer_path=tokenizer_path,
+            specs=dataset_specs,
+            output_prefix=output_prefix,
+            hf_token=hf_token,
+            target_tokens=target_tokens,
+            minimum_chars=minimum_chars,
+            shuffle_buffer=shuffle_buffer,
+            overwrite=overwrite,
+        )
+
+        logger.info(
+            "%s corpus ready (%d tokens, %d sequences)",
+            stage,
+            stats["totals"]["tokens"],
+            stats["totals"]["sequences"],
+        )
+
+        if bin_path != dataset_path:
+            logger.debug("Linking %s -> %s", bin_path, dataset_path)
+            dataset_path.parent.mkdir(parents=True, exist_ok=True)
+            if dataset_path.exists():
+                dataset_path.unlink()
+            dataset_path.symlink_to(bin_path.resolve())
+        if idx_out_path != idx_path:
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            if idx_path.exists():
+                idx_path.unlink()
+            idx_path.symlink_to(idx_out_path.resolve())
+
     def download_and_process_data(self):
-        """Download and process training data."""
-        logger.info("Downloading and processing data...")
-        
-        # Download data
-        os.system(
-            "python scripts/download_data.py --domains science data code chess general --output-dir data/raw/cloud"
-        )
-        
-        # Process data
-        os.system(
-            "python scripts/process_cloud_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud"
-        )
+        """Materialize Stage 1/2 tokenized corpora using real datasets."""
+        logger.info("Preparing text corpora for cloud training...")
+        self._prepare_stage_text("stage1", self.stage1_config)
+        self._prepare_stage_text("stage2", self.stage2_config)
 
-        processed_dir = Path("data/processed/cloud")
-        self._build_stage_shards(processed_dir)
-        
-        # Build tokenizer if not exists
-        if not Path("artifacts/tokenizer/fustercluck.model").exists():
-            logger.info("Building tokenizer...")
-            os.system("python scripts/build_tokenizer.py data/processed/cloud --output artifacts/tokenizer/fustercluck --vocab-size 50000")
-        
-        # Tokenize data
-        logger.info("Tokenizing data...")
-        os.system(
-            "python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model "
-            "data/tokenized/cloud/stage1 data/processed/cloud/stage1_mix.txt"
-        )
-        os.system(
-            "python scripts/pretokenize_text.py artifacts/tokenizer/fustercluck.model "
-            "data/tokenized/cloud/stage2 data/processed/cloud/stage2_mix.txt"
-        )
-
-    def _build_stage_shards(self, processed_dir: Path) -> None:
-        """Combine processed domain files into stage-level text shards."""
-
-        def concat(domains: Iterable[str], output_name: str) -> None:
-            output_path = processed_dir / output_name
-            with output_path.open("w", encoding="utf-8") as handle:
-                for domain in domains:
-                    domain_path = processed_dir / f"{domain}_processed.txt"
-                    if not domain_path.exists():
-                        logger.warning("Missing processed slice %s", domain_path)
-                        continue
-                    handle.write(domain_path.read_text(encoding="utf-8"))
-                    handle.write("\n")
-            logger.info("Wrote %s", output_path)
-
-        concat(["science", "data", "code"], "stage1_mix.txt")
-        concat(["science", "data", "code", "chess", "general"], "stage2_mix.txt")
-        
     def run_stage1(self, resume: bool = False):
         """Run Stage 1 training (2B tokens)."""
         logger.info("Starting Stage 1 training...")
@@ -262,9 +373,7 @@ class CloudTrainer:
         """Run Stage 3 multimodal alignment."""
         if "stage3" not in self.config:
             raise RuntimeError("stage3 configuration missing from YAML")
-        vision_cfg = self._build_vision_config(self.config.stage3)
-        if not vision_cfg.vision_shards:
-            raise RuntimeError("stage3.vision_shards is empty – provide WebDataset shards")
+        vision_cfg = self._build_vision_config(self.config.stage3, "stage3")
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
             grad_clip=vision_cfg.grad_clip,
@@ -301,9 +410,7 @@ class CloudTrainer:
         """Run Stage 4 multimodal training."""
         if "stage4" not in self.config:
             raise RuntimeError("stage4 configuration missing from YAML")
-        vision_cfg = self._build_vision_config(self.config.stage4)
-        if not vision_cfg.vision_shards:
-            raise RuntimeError("stage4.vision_shards is empty – provide WebDataset shards")
+        vision_cfg = self._build_vision_config(self.config.stage4, "stage4")
         trainer_cfg = TrainerConfig(
             device=self.trainer_config.device,
             grad_clip=self.stage1_config.grad_clip,

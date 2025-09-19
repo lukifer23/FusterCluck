@@ -3,6 +3,7 @@
 
 import os
 import sys
+import shutil
 from pathlib import Path
 
 def download_working_datasets():
@@ -89,25 +90,20 @@ def create_fallback_data():
     
     # Process and combine
     os.system("python scripts/process_cloud_data.py --input-dir data/raw/cloud --output-dir data/processed/cloud --target-tokens 2000000000")
-    
+
     # Split into stage1 and stage2
-    os.system("python -c \"
-import shutil
-from pathlib import Path
+    mix_file = Path('data/processed/cloud/mix.txt')
+    stage1_file = Path('data/processed/cloud/stage1_mix.txt')
+    stage2_file = Path('data/processed/cloud/stage2_mix.txt')
 
-# Create stage files by duplicating processed data
-stage1_file = Path('data/processed/cloud/stage1_mix.txt')
-stage2_file = Path('data/processed/cloud/stage2_mix.txt')
+    if mix_file.exists():
+        stage1_file.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy(mix_file, stage1_file)
+        shutil.copy(mix_file, stage2_file)
+        print('✅ Created stage files from processed data')
+    else:
+        print('❌ No processed data found')
 
-# Copy processed data to both stages
-if Path('data/processed/cloud/mix.txt').exists():
-    shutil.copy('data/processed/cloud/mix.txt', stage1_file)
-    shutil.copy('data/processed/cloud/mix.txt', stage2_file)
-    print('✅ Created stage files from processed data')
-else:
-    print('❌ No processed data found')
-\"")
-    
     return Path("data/processed/cloud/stage1_mix.txt").exists()
 
 def main():

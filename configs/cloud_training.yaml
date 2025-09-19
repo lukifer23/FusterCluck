@@ -95,7 +95,7 @@ stage3:
     weight_decay: 0.1
     eps: 1e-8
   vision_shards:
-    - "/workspace/datasets/vision/stage3/shard-{000000..000100}.tar"
+    - "${cloud.storage_path}/datasets/vision/stage3/shard-{000000..000511}.tar"
   shuffle_buffer: 1024
   image_token: "<image>"
   adapter:
@@ -128,7 +128,7 @@ stage4:
     weight_decay: 0.1
     eps: 1e-8
   vision_shards:
-    - "/workspace/datasets/vision/stage4/shard-{000000..000150}.tar"
+    - "${cloud.storage_path}/datasets/vision/stage4/shard-{000000..001023}.tar"
   shuffle_buffer: 1024
   image_token: "<image>"
   adapter:
@@ -171,3 +171,61 @@ monitoring:
     - "tokens_per_second"
     - "memory_usage"
     - "gpu_utilization"
+
+data:
+  hf_token_env: "HF_TOKEN"
+  stage1:
+    tokenizer_path: "artifacts/tokenizer/fustercluck.model"
+    output_prefix: "data/tokenized/cloud/stage1"
+    target_tokens: 2000000000
+    minimum_chars: 32
+    shuffle_buffer: 65536
+    datasets:
+      - name: "HuggingFaceM4/RefinedWeb"
+        split: "train"
+        text_field: "text"
+        sample_limit: 5000000
+        shuffle_buffer: 10000
+      - name: "allenai/dolma-science"
+        split: "train"
+        text_field: "text"
+        sample_limit: 2000000
+        shuffle_buffer: 10000
+      - name: "allenai/dolma-code"
+        split: "train"
+        text_field: "text"
+        sample_limit: 1000000
+        shuffle_buffer: 10000
+      - name: "wikimedia/wikipedia"
+        config: "20231101.en"
+        split: "train"
+        text_field: "text"
+        sample_limit: 750000
+        shuffle_buffer: 8000
+  stage2:
+    tokenizer_path: "artifacts/tokenizer/fustercluck.model"
+    output_prefix: "data/tokenized/cloud/stage2"
+    target_tokens: 5000000000
+    minimum_chars: 32
+    shuffle_buffer: 65536
+    datasets:
+      - name: "cerebras/SlimPajama-627B"
+        split: "train"
+        text_field: "text"
+        sample_limit: 8000000
+        shuffle_buffer: 20000
+      - name: "allenai/dolma-books"
+        split: "train"
+        text_field: "text"
+        sample_limit: 4000000
+        shuffle_buffer: 20000
+      - name: "HuggingFaceM4/RefinedWeb"
+        split: "train"
+        text_field: "text"
+        sample_limit: 2000000
+        shuffle_buffer: 10000
+      - name: "projecteverest/m2d2"
+        split: "train"
+        text_field: "text"
+        sample_limit: 1500000
+        shuffle_buffer: 8000
