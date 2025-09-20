@@ -17,7 +17,7 @@ stage1:
   effective_batch_size: 524288  # 4096 * 4 * 32
   precision: bf16
   log_interval: 20
-  eval_interval: 500
+  eval_interval: 100
   checkpoint_dir: "artifacts/checkpoints/cloud/stage1"
   model_dim: 1024
   model_layers: 24
@@ -50,7 +50,7 @@ stage2:
   effective_batch_size: 524288
   precision: bf16
   log_interval: 20
-  eval_interval: 500
+  eval_interval: 100
   checkpoint_dir: "artifacts/checkpoints/cloud/stage2"
   model_dim: 1024
   model_layers: 24

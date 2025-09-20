@@ -163,6 +163,31 @@ class Stage0Trainer:
             scaler = torch.cuda.amp.GradScaler()
 
         tokens_per_update = self.cfg.seq_len * self.cfg.micro_batch_size * grad_accum
+        
+        # Add signal handlers for graceful shutdown
+        import signal
+        import sys
+        
+        def signal_handler(signum, frame):
+            LOGGER.info("Received signal %d, saving emergency checkpoint...", signum)
+            try:
+                self.checkpoint.save(
+                    self.step,
+                    self.model,
+                    self.optimizer,
+                    step=self.step,
+                    eval_loss=0.0,  # Placeholder
+                    elapsed=self.total_elapsed,
+                    emergency=True
+                )
+                LOGGER.info("Emergency checkpoint saved successfully")
+            except Exception as e:
+                LOGGER.error("Failed to save emergency checkpoint: %s", e)
+            sys.exit(1)
+        
+        signal.signal(signal.SIGINT, signal_handler)
+        signal.signal(signal.SIGTERM, signal_handler)
+        
         while self.step < self.cfg.max_steps:
             loss_accum = 0.0
             step_start = time.time()
@@ -212,14 +237,19 @@ class Stage0Trainer:
                 batch = self._next_batch()
                 eval_loss = evaluate(self.model, batch.to(self.device), self.device)
                 LOGGER.info("eval_loss=%.4f", eval_loss)
-                self.checkpoint.save(
-                    self.step,
-                    self.model,
-                    self.optimizer,
-                    step=self.step,
-                    eval_loss=eval_loss,
-                    elapsed=self.total_elapsed,
-                )
+                try:
+                    checkpoint_path = self.checkpoint.save(
+                        self.step,
+                        self.model,
+                        self.optimizer,
+                        step=self.step,
+                        eval_loss=eval_loss,
+                        elapsed=self.total_elapsed,
+                    )
+                    LOGGER.info("Checkpoint saved to %s", checkpoint_path)
+                except Exception as e:
+                    LOGGER.error("Failed to save checkpoint at step %d: %s", self.step, e)
+                    raise RuntimeError(f"Checkpoint save failed at step {self.step}") from e
 
             if math.isnan(loss_accum):
                 raise RuntimeError("NaN detected in loss")
