@@ -185,7 +185,6 @@ class Stage0Trainer:
                     self.step,
                     self.model,
                     self.optimizer,
-                    step=self.step,
                     eval_loss=0.0,  # Placeholder
                     elapsed=self.total_elapsed,
                     emergency=True
@@ -260,7 +259,6 @@ class Stage0Trainer:
                         self.step,
                         self.model,
                         self.optimizer,
-                        step=self.step,
                         eval_loss=eval_loss,
                         elapsed=self.total_elapsed,
                     )
