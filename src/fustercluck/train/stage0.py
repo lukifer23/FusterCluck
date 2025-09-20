@@ -9,6 +9,7 @@ from pathlib import Path
 
 import torch
 import torch.nn.functional as F
+import torch.compiler
 from torch.utils.data import DataLoader, IterableDataset
 
 from fustercluck.data.tokenized_dataset import TokenizedDataset
@@ -200,6 +201,11 @@ class Stage0Trainer:
         while self.step < self.cfg.max_steps:
             loss_accum = 0.0
             step_start = time.time()
+            
+            # Mark step begin for CUDA Graphs to prevent tensor overwriting
+            if self.trainer_cfg.use_compile and hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
+                torch.compiler.cudagraph_mark_step_begin()
+            
             for micro_step in range(grad_accum):
                 try:
                     batch = self._next_batch()
@@ -243,6 +249,9 @@ class Stage0Trainer:
                 self.throughput.reset()
 
             if self.step % self.cfg.eval_interval == 0:
+                # Mark step begin for CUDA Graphs during evaluation
+                if self.trainer_cfg.use_compile and hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
+                    torch.compiler.cudagraph_mark_step_begin()
                 batch = self._next_batch()
                 eval_loss = evaluate(self.model, batch.to(self.device), self.device)
                 LOGGER.info("eval_loss=%.4f", eval_loss)
