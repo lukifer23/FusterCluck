@@ -139,7 +139,7 @@ stage4:
 
 trainer:
   device: cuda
-  use_compile: true
+  use_compile: false  # Disabled due to CUDA Graph tensor overwriting issues
   compile_mode: "reduce-overhead"
   precision: bf16
   gradient_checkpointing: true
