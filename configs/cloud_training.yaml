@@ -11,10 +11,10 @@ stage1:
   idx_path: "data/tokenized/cloud/stage1.idx"
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 4000
-  seq_len: 4096
-  micro_batch_size: 16
-  gradient_accumulation: 16
-  effective_batch_size: 1048576  # 4096 * 16 * 16
+  seq_len: 2048
+  micro_batch_size: 4
+  gradient_accumulation: 64
+  effective_batch_size: 524288  # 2048 * 4 * 64
   precision: bf16
   log_interval: 20
   eval_interval: 100
@@ -44,10 +44,10 @@ stage2:
   idx_path: "data/tokenized/cloud/stage2.idx"
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 10000
-  seq_len: 4096
-  micro_batch_size: 16
-  gradient_accumulation: 16
-  effective_batch_size: 1048576
+  seq_len: 2048
+  micro_batch_size: 4
+  gradient_accumulation: 64
+  effective_batch_size: 524288
   precision: bf16
   log_interval: 20
   eval_interval: 100
@@ -74,7 +74,7 @@ stage2:
 stage3:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 1000
-  seq_len: 4096
+  seq_len: 2048
   micro_batch_size: 4
   gradient_accumulation: 32
   precision: bf16
@@ -107,7 +107,7 @@ stage3:
 stage4:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 1500
-  seq_len: 4096
+  seq_len: 2048
   micro_batch_size: 4
   gradient_accumulation: 32
   precision: bf16

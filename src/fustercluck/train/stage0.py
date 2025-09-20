@@ -70,8 +70,8 @@ def create_dataloader(
 def apply_compile(model: torch.nn.Module, trainer_cfg: TrainerConfig) -> torch.nn.Module:
     if trainer_cfg.use_compile and hasattr(torch, "compile"):
         LOGGER.info("Compiling model with mode=%s", trainer_cfg.compile_mode)
-        # Enable fullgraph compilation for better performance on H100
-        return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=True)  # type: ignore[attr-defined]
+        # Use reduce-overhead mode for memory efficiency
+        return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=False)  # type: ignore[attr-defined]
     return model
 
 
