@@ -70,7 +70,8 @@ def create_dataloader(
 def apply_compile(model: torch.nn.Module, trainer_cfg: TrainerConfig) -> torch.nn.Module:
     if trainer_cfg.use_compile and hasattr(torch, "compile"):
         LOGGER.info("Compiling model with mode=%s", trainer_cfg.compile_mode)
-        return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=False)  # type: ignore[attr-defined]
+        # Enable fullgraph compilation for better performance on H100
+        return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=True)  # type: ignore[attr-defined]
     return model
 
 
@@ -124,6 +125,11 @@ class Stage0Trainer:
             weight_decay=cfg.optimizer.weight_decay,
         )
 
+        # Apply gradient checkpointing if enabled
+        if getattr(trainer_cfg, 'gradient_checkpointing', False):
+            LOGGER.info("Enabling gradient checkpointing")
+            self.model.gradient_checkpointing_enable()
+
         self.model = apply_compile(self.model, trainer_cfg)
 
         self.dataset = TokenizedDataset(cfg.dataset_path, cfg.idx_path)
@@ -135,6 +141,9 @@ class Stage0Trainer:
         if self.device.type == "cuda":
             torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore
             torch.backends.cudnn.allow_tf32 = True
+            # Enable optimizations for H100
+            torch.backends.cudnn.benchmark = True
+            torch.backends.cudnn.deterministic = False
         LOGGER.info(
             "Stage0 setup: device=%s precision=%s seq_len=%d micro_batch=%d grad_accum=%d effective_tokens=%d",
             self.device,
