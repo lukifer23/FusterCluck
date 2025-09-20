@@ -12,9 +12,9 @@ stage1:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 4000
   seq_len: 4096
-  micro_batch_size: 32
-  gradient_accumulation: 8
-  effective_batch_size: 1048576  # 4096 * 32 * 8
+  micro_batch_size: 16
+  gradient_accumulation: 16
+  effective_batch_size: 1048576  # 4096 * 16 * 16
   precision: bf16
   log_interval: 20
   eval_interval: 100
@@ -45,8 +45,8 @@ stage2:
   tokenizer_path: "artifacts/tokenizer/fustercluck.model"
   max_steps: 10000
   seq_len: 4096
-  micro_batch_size: 32
-  gradient_accumulation: 8
+  micro_batch_size: 16
+  gradient_accumulation: 16
   effective_batch_size: 1048576
   precision: bf16
   log_interval: 20
@@ -140,7 +140,7 @@ stage4:
 trainer:
   device: cuda
   use_compile: true
-  compile_mode: "max-autotune"
+  compile_mode: "reduce-overhead"
   precision: bf16
   gradient_checkpointing: true
   activation_recompute: true
