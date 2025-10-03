@@ -28,24 +28,43 @@ def download_domain_corpus(
     """Download corpus for a specific domain."""
 
     # Domain-specific dataset configurations
-    # Note: Using HuggingFaceFW datasets as alternatives since academic/code datasets have access issues
+    # Expanded to use multiple FineWeb configs for 6B token scale
     domain_datasets = {
         "physics": [
-            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::15000",  # Educational content (physics/math heavy)
+            # Multiple configs for diversity and scale
+            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::100000",   # 100k samples
+            "HuggingFaceFW/fineweb-edu:sample-100BT:train:text::50000",  # 50k samples
+            "HuggingFaceFW/fineweb-edu:CC-MAIN-2025-05:train:text::30000", # 30k samples
+            "HuggingFaceFW/fineweb-edu:CC-MAIN-2025-13:train:text::30000", # 30k samples
+            "HuggingFaceFW/fineweb:sample-10BT:train:text::50000",       # 50k general (physics content)
         ],
         "math": [
-            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::15000",  # Educational content (physics/math heavy)
+            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::100000",   # 100k samples
+            "HuggingFaceFW/fineweb-edu:sample-100BT:train:text::50000",  # 50k samples
+            "HuggingFaceFW/fineweb-edu:CC-MAIN-2025-08:train:text::30000", # 30k samples
+            "HuggingFaceFW/fineweb-edu:CC-MAIN-2025-18:train:text::30000", # 30k samples
+            "HuggingFaceFW/fineweb:sample-10BT:train:text::50000",       # 50k general (math content)
         ],
         "code": [
-            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::20000",  # Educational content (programming tutorials)
-            "HuggingFaceFW/fineweb:sample-10BT:train:text::15000",  # General web content (code examples)
+            # Programming-focused from educational and general sources
+            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::150000",   # 150k educational
+            "HuggingFaceFW/fineweb-edu:sample-100BT:train:text::75000",  # 75k educational
+            "HuggingFaceFW/fineweb:sample-10BT:train:text::100000",      # 100k general
+            "HuggingFaceFW/fineweb:sample-100BT:train:text::50000",     # 50k general
+            "HuggingFaceFW/fineweb:CC-MAIN-2025-13:train:text::50000",  # 50k different snapshot
         ],
         "general": [
-            "HuggingFaceFW/fineweb:sample-10BT:train:text::5000",  # General web content
+            # Broad general content for language diversity
+            "HuggingFaceFW/fineweb:sample-10BT:train:text::200000",      # 200k samples
+            "HuggingFaceFW/fineweb:sample-100BT:train:text::100000",    # 100k samples
+            "HuggingFaceFW/fineweb:CC-MAIN-2025-21:train:text::75000",  # 75k samples
+            "HuggingFaceFW/fineweb:CC-MAIN-2025-26:train:text::75000",  # 75k samples
         ],
         "chess": [
-            # Chess data is already downloaded via other scripts
-            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::1000",  # Educational content (chess tutorials)
+            # Chess content from educational sources
+            "HuggingFaceFW/fineweb-edu:sample-10BT:train:text::10000",   # 10k samples
+            "HuggingFaceFW/fineweb-edu:sample-100BT:train:text::5000",  # 5k samples
+            "HuggingFaceFW/fineweb:sample-10BT:train:text::15000",      # 15k general (chess content)
         ]
     }
 

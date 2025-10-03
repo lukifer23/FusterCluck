@@ -33,9 +33,8 @@ class PackedSequenceDataset(IterableDataset):
         self.shuffle = shuffle
 
     def __iter__(self):  # type: ignore[override]
-        # For testing: limit to first 100 sequences to avoid massive processing
-        max_sequences = min(100, len(self.dataset))
-        print(f"[DEBUG] Using subset of {max_sequences}/{len(self.dataset)} sequences for testing")
+        # Use full dataset for training
+        max_sequences = len(self.dataset)
 
         if self.shuffle:
             indices = torch.randperm(max_sequences, dtype=torch.long)
@@ -215,8 +214,10 @@ class TextStageTrainer:
 
         self._install_signal_handlers()
 
+        print("[DEBUG] About to enter training loop...")
         while self.step < self.cfg.max_steps:
             try:
+                print(f"[DEBUG] Starting step {self.step}")
                 loss_accum = torch.tensor(0.0, device=self.device)
                 step_start = time.time()
 
@@ -254,6 +255,7 @@ class TextStageTrainer:
                 self.total_elapsed += elapsed
 
                 if self.step % self.cfg.log_interval == 0:
+                    print(f"[DEBUG] Step {self.step} reached log interval, computing stats...")
                     avg_step = self.total_elapsed / self.step if self.step else 0.0
                     remaining_steps = max(self.cfg.max_steps - self.step, 0)
                     eta_seconds = avg_step * remaining_steps
