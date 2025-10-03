@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train SentencePiece tokenizer for FusterCluck."""
+"""Train SentencePiece tokenizer for the text-only FusterCluck stack."""
 
 from __future__ import annotations
 
@@ -10,13 +10,12 @@ from pathlib import Path
 from fustercluck.tokenizer.sentencepiece_trainer import train_sentencepiece
 
 EXTRA_SYMBOLS = [
-    "<image>",
-    "<im_end>",
+    "<reasoning>",
+    "</reasoning>",
     "<tool>",
     "<json>",
     "<sys>",
-    "<reasoning>",
-    "</reasoning>",
+    "<scratchpad>",
 ]
 
 

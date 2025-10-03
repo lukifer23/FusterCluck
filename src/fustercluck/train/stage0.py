@@ -1,20 +1,21 @@
-"""Stage 0: tokenizer sanity check and 50M-token overfit."""
+"""Generic text-stage trainer: tokenizer sanity and full pre-training runs."""
 
 from __future__ import annotations
 
 import logging
 import math
+import signal
+import sys
 import time
 from pathlib import Path
 
 import torch
 import torch.nn.functional as F
-import torch.compiler
 from torch.utils.data import DataLoader, IterableDataset
 
 from fustercluck.data.tokenized_dataset import TokenizedDataset
 from fustercluck.models.components import FusterCluckDecoder
-from fustercluck.train.config import Stage0Config, TrainerConfig
+from fustercluck.train.config import StageConfig, TrainerConfig
 from fustercluck.utils.checkpoint import CheckpointManager
 from fustercluck.utils.misc import amp_autocast, ensure_dir, get_device
 from fustercluck.train.utils import ThroughputTracker, format_timespan
@@ -32,9 +33,20 @@ class PackedSequenceDataset(IterableDataset):
         self.shuffle = shuffle
 
     def __iter__(self):  # type: ignore[override]
-        indices = torch.randperm(len(self.dataset)) if self.shuffle else torch.arange(len(self.dataset))
+        print(f"[DEBUG] Creating iterator for {len(self.dataset)} sequences")
+        if self.shuffle:
+            print(f"[DEBUG] Shuffling {len(self.dataset)} indices...")
+            indices = torch.randperm(len(self.dataset))
+            print(f"[DEBUG] Shuffle complete")
+        else:
+            indices = torch.arange(len(self.dataset))
+
         buffer: list[int] = []
-        for idx in indices.tolist():
+        processed = 0
+        for i, idx in enumerate(indices.tolist()):
+            if i % 10000 == 0:  # Progress every 10k samples
+                print(f"[DEBUG] Processed {i}/{len(indices)} samples, buffer size: {len(buffer)}")
+
             sample = self.dataset[idx].tolist()
             while sample:
                 remaining = self.seq_len - len(buffer)
@@ -42,16 +54,21 @@ class PackedSequenceDataset(IterableDataset):
                 buffer.extend(sample[:take])
                 sample = sample[take:]
                 if len(buffer) == self.seq_len:
+                    processed += 1
+                    if processed % 100 == 0:  # Progress every 100 batches
+                        print(f"[DEBUG] Yielded {processed} batches")
                     yield torch.tensor(buffer, dtype=torch.long)
                     buffer = []
+
         if buffer:
             padded = buffer + [0] * (self.seq_len - len(buffer))
             yield torch.tensor(padded, dtype=torch.long)
+            print(f"[DEBUG] Yielded final partial batch")
 
 
 def create_dataloader(
     dataset: TokenizedDataset,
-    cfg: Stage0Config,
+    cfg: StageConfig,
     trainer_cfg: TrainerConfig | None = None,
 ) -> DataLoader:
     iterable = PackedSequenceDataset(dataset, cfg.seq_len)
@@ -71,8 +88,10 @@ def create_dataloader(
 def apply_compile(model: torch.nn.Module, trainer_cfg: TrainerConfig) -> torch.nn.Module:
     if trainer_cfg.use_compile and hasattr(torch, "compile"):
         LOGGER.info("Compiling model with mode=%s", trainer_cfg.compile_mode)
-        # Use reduce-overhead mode for memory efficiency
-        return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=False)  # type: ignore[attr-defined]
+        try:
+            return torch.compile(model, mode=trainer_cfg.compile_mode, fullgraph=False)  # type: ignore[attr-defined]
+        except RuntimeError as exc:
+            LOGGER.warning("torch.compile failed (%s); continuing without compilation", exc)
     return model
 
 
@@ -97,15 +116,23 @@ def evaluate(model: FusterCluckDecoder, batch: torch.Tensor, device: torch.devic
     return float(loss.item())
 
 
-class Stage0Trainer:
-    def __init__(self, cfg: Stage0Config, trainer_cfg: TrainerConfig) -> None:
+class TextStageTrainer:
+    """Trainer capable of running Stage 0 sanity or full text pre-training."""
+
+    def __init__(self, cfg: StageConfig, trainer_cfg: TrainerConfig) -> None:
+        print(f"[DEBUG] Initializing TextStageTrainer with device: {trainer_cfg.device}")
         self.cfg = cfg
         self.trainer_cfg = trainer_cfg
         self.device = get_device(trainer_cfg.device)
+        print(f"[DEBUG] Resolved device: {self.device}")
         ensure_dir(cfg.checkpoint_dir)
         self.checkpoint = CheckpointManager(cfg.checkpoint_dir)
 
+        print("[DEBUG] Loading tokenizer...")
         vocab_size = load_vocab(cfg.tokenizer_path)
+        print(f"[DEBUG] Vocab size: {vocab_size}")
+
+        print("[DEBUG] Creating model...")
         self.model = FusterCluckDecoder(
             vocab_size=vocab_size,
             dim=cfg.model_dim,
@@ -116,7 +143,13 @@ class Stage0Trainer:
             rope_theta=cfg.rope_theta,
             dropout=cfg.dropout,
         )
-        self.model.to(self.device)
+        print("[DEBUG] Model created, moving to device...")
+        self.model = self.model.to(self.device)
+        print("[DEBUG] Model moved to device")
+
+        if trainer_cfg.gradient_checkpointing:
+            LOGGER.info("Enabling gradient checkpointing")
+            self.model.gradient_checkpointing_enable()
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -126,33 +159,41 @@ class Stage0Trainer:
             weight_decay=cfg.optimizer.weight_decay,
         )
 
-        # Apply gradient checkpointing if enabled
-        if getattr(trainer_cfg, 'gradient_checkpointing', False):
-            LOGGER.info("Enabling gradient checkpointing")
-            self.model.gradient_checkpointing_enable()
-
+        print("[DEBUG] Applying compile...")
         self.model = apply_compile(self.model, trainer_cfg)
 
+        print("[DEBUG] Loading dataset...")
         self.dataset = TokenizedDataset(cfg.dataset_path, cfg.idx_path)
+        print(f"[DEBUG] Dataset loaded, length: {len(self.dataset)}")
+
+        print("[DEBUG] Creating dataloader...")
         self.dataloader = self._make_iterator()
+        print("[DEBUG] Dataloader created")
+
         self.step = 0
         self.throughput = ThroughputTracker()
         self.total_elapsed = 0.0
-        effective_batch = cfg.seq_len * cfg.micro_batch_size * cfg.gradient_accumulation
+        self.tokens_per_update = cfg.seq_len * cfg.micro_batch_size * cfg.gradient_accumulation
+        print(f"[DEBUG] Tokens per update: {self.tokens_per_update}")
+
         if self.device.type == "cuda":
-            torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore
-            torch.backends.cudnn.allow_tf32 = True
-            # Enable optimizations for H100
-            torch.backends.cudnn.benchmark = True
-            torch.backends.cudnn.deterministic = False
+            torch.backends.cuda.matmul.allow_tf32 = True  # type: ignore[attr-defined]
+            torch.backends.cudnn.allow_tf32 = True  # type: ignore[attr-defined]
+            torch.backends.cudnn.benchmark = True  # type: ignore[attr-defined]
+            torch.backends.cudnn.deterministic = False  # type: ignore[attr-defined]
+        elif self.device.type == "mps":
+            torch.set_float32_matmul_precision("medium")
+
+        print("[DEBUG] TextStageTrainer initialization complete")
+
         LOGGER.info(
-            "Stage0 setup: device=%s precision=%s seq_len=%d micro_batch=%d grad_accum=%d effective_tokens=%d",
+            "Trainer setup: device=%s precision=%s seq_len=%d micro_batch=%d grad_accum=%d tokens/update=%d",
             self.device,
             self.trainer_cfg.precision,
             cfg.seq_len,
             cfg.micro_batch_size,
             cfg.gradient_accumulation,
-            effective_batch,
+            self.tokens_per_update,
         )
 
     def _make_iterator(self):
@@ -165,52 +206,50 @@ class Stage0Trainer:
             self.dataloader = self._make_iterator()
             return next(self.dataloader)
 
+    def _install_signal_handlers(self) -> None:
+        def handler(signum, _frame):
+            LOGGER.info("Received signal %d; writing emergency checkpoint", signum)
+            try:
+                self.checkpoint.save(
+                    self.step,
+                    self.model,
+                    self.optimizer,
+                    eval_loss=0.0,
+                    elapsed=self.total_elapsed,
+                    emergency=True,
+                )
+            except Exception as exc:  # pragma: no cover - best effort
+                LOGGER.error("Emergency checkpoint failed: %s", exc)
+            finally:
+                sys.exit(1)
+
+        signal.signal(signal.SIGINT, handler)
+        signal.signal(signal.SIGTERM, handler)
+
     def train(self) -> None:
+        print("[DEBUG] Starting train() method")
         logging.basicConfig(level=logging.INFO, format="[%(asctime)s] %(levelname)s: %(message)s")
         grad_accum = self.cfg.gradient_accumulation
         scaler = None
         if self.device.type == "cuda" and self.trainer_cfg.precision == "fp16":
             scaler = torch.cuda.amp.GradScaler()
 
-        tokens_per_update = self.cfg.seq_len * self.cfg.micro_batch_size * grad_accum
-        
-        # Add signal handlers for graceful shutdown
-        import signal
-        import sys
-        
-        def signal_handler(signum, frame):
-            LOGGER.info("Received signal %d, saving emergency checkpoint...", signum)
-            try:
-                self.checkpoint.save(
-                    self.step,
-                    self.model,
-                    self.optimizer,
-                    eval_loss=0.0,  # Placeholder
-                    elapsed=self.total_elapsed,
-                    emergency=True
-                )
-                LOGGER.info("Emergency checkpoint saved successfully")
-            except Exception as e:
-                LOGGER.error("Failed to save emergency checkpoint: %s", e)
-            sys.exit(1)
-        
-        signal.signal(signal.SIGINT, signal_handler)
-        signal.signal(signal.SIGTERM, signal_handler)
-        
+        print("[DEBUG] Installing signal handlers...")
+        self._install_signal_handlers()
+        print("[DEBUG] Signal handlers installed")
+
+        print(f"[DEBUG] Starting training loop, max_steps: {self.cfg.max_steps}")
         while self.step < self.cfg.max_steps:
+            print(f"[DEBUG] Step {self.step} starting...")
             loss_accum = 0.0
             step_start = time.time()
-            
-            # Mark step begin for CUDA Graphs to prevent tensor overwriting
-            if self.trainer_cfg.use_compile and hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
-                torch.compiler.cudagraph_mark_step_begin()
-            
-            for micro_step in range(grad_accum):
-                try:
-                    batch = self._next_batch()
-                except StopIteration:  # pragma: no cover - defensive, should not hit
-                    raise RuntimeError("Dataset iterator exhausted; provide more packed tokens")
+
+            for accum_step in range(grad_accum):
+                print(f"[DEBUG] Getting batch {accum_step + 1}/{grad_accum}...")
+                batch = self._next_batch()
+                print(f"[DEBUG] Moving batch to device...")
                 batch = batch.to(self.device)
+                print(f"[DEBUG] Batch shape: {batch.shape}")
                 input_ids = batch[:, :-1]
                 targets = batch[:, 1:]
                 with amp_autocast(self.trainer_cfg.precision, self.device):
@@ -222,6 +261,7 @@ class Stage0Trainer:
                 else:
                     loss.backward()
                 loss_accum += loss.item()
+
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.trainer_cfg.grad_clip)
             if scaler is not None:
                 scaler.step(self.optimizer)
@@ -230,14 +270,17 @@ class Stage0Trainer:
                 self.optimizer.step()
             self.optimizer.zero_grad(set_to_none=True)
             self.step += 1
+
             elapsed = time.time() - step_start
-            self.throughput.update(tokens_per_update, elapsed)
+            self.throughput.update(self.tokens_per_update, elapsed)
             self.total_elapsed += elapsed
 
             if self.step % self.cfg.log_interval == 0:
                 avg_step = self.total_elapsed / self.step if self.step else 0.0
                 remaining_steps = max(self.cfg.max_steps - self.step, 0)
                 eta_seconds = avg_step * remaining_steps
+                print(f"[TRAINING] step={self.step} loss={loss_accum * grad_accum:.4f} "
+                      f"tokens/s={self.throughput.tokens_per_second:.1f} eta={format_timespan(eta_seconds) if self.step else '--:--'}")
                 LOGGER.info(
                     "step=%d loss=%.4f tokens/s=%.1f eta=%s",
                     self.step,
@@ -248,24 +291,17 @@ class Stage0Trainer:
                 self.throughput.reset()
 
             if self.step % self.cfg.eval_interval == 0:
-                # Mark step begin for CUDA Graphs during evaluation
-                if self.trainer_cfg.use_compile and hasattr(torch.compiler, 'cudagraph_mark_step_begin'):
-                    torch.compiler.cudagraph_mark_step_begin()
-                batch = self._next_batch()
-                eval_loss = evaluate(self.model, batch.to(self.device), self.device)
+                eval_batch = self._next_batch().to(self.device)
+                eval_loss = evaluate(self.model, eval_batch, self.device)
                 LOGGER.info("eval_loss=%.4f", eval_loss)
-                try:
-                    checkpoint_path = self.checkpoint.save(
-                        self.step,
-                        self.model,
-                        self.optimizer,
-                        eval_loss=eval_loss,
-                        elapsed=self.total_elapsed,
-                    )
-                    LOGGER.info("Checkpoint saved to %s", checkpoint_path)
-                except Exception as e:
-                    LOGGER.error("Failed to save checkpoint at step %d: %s", self.step, e)
-                    raise RuntimeError(f"Checkpoint save failed at step {self.step}") from e
+                checkpoint_path = self.checkpoint.save(
+                    self.step,
+                    self.model,
+                    self.optimizer,
+                    eval_loss=eval_loss,
+                    elapsed=self.total_elapsed,
+                )
+                LOGGER.info("Checkpoint saved to %s", checkpoint_path)
 
             if math.isnan(loss_accum):
                 raise RuntimeError("NaN detected in loss")
@@ -275,8 +311,7 @@ class Stage0Trainer:
         self.model.load_state_dict(state["model"])  # type: ignore[index]
         self.optimizer.load_state_dict(state["optimizer"])  # type: ignore[index]
         metadata = state.get("metadata", {})
-        resume_step = int(metadata.get("step", self._step_from_filename(checkpoint_path)))
-        self.step = resume_step
+        self.step = int(metadata.get("step", self._step_from_filename(checkpoint_path)))
         self.total_elapsed = float(metadata.get("elapsed", self.total_elapsed))
         LOGGER.info("Resumed from %s at step=%d", checkpoint_path, self.step)
         self.throughput.reset()
@@ -289,7 +324,10 @@ class Stage0Trainer:
             return 0
 
 
-def run_stage0(cfg: Stage0Config, trainer_cfg: TrainerConfig | None = None) -> None:
+def run_stage(cfg: StageConfig, trainer_cfg: TrainerConfig | None = None) -> None:
     trainer_cfg = trainer_cfg or TrainerConfig(device="mps")
-    trainer = Stage0Trainer(cfg, trainer_cfg)
+    trainer = TextStageTrainer(cfg, trainer_cfg)
     trainer.train()
+
+
+__all__ = ["TextStageTrainer", "run_stage", "create_dataloader", "PackedSequenceDataset"]

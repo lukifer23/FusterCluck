@@ -1,221 +1,208 @@
 #!/usr/bin/env python3
-"""Training monitoring script to detect crashes and provide recovery options."""
+"""Monitor text-only training runs and surface recovery guidance."""
+
+from __future__ import annotations
 
 import argparse
-import json
 import logging
-import os
-import signal
+import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any
+from typing import Any, Dict, Iterable
 
 import psutil
 
+LOG_PATH = Path("logs/text_training_monitor.log")
+TARGET_COMMANDS = {"run_text_pipeline.py", "run_stage0.py"}
 
-def setup_logging():
+
+def setup_logging() -> logging.Logger:
+    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
     logging.basicConfig(
         level=logging.INFO,
         format="[%(asctime)s] %(levelname)s: %(message)s",
-        handlers=[
-            logging.StreamHandler(),
-            logging.FileHandler("training_monitor.log")
-        ]
+        handlers=[logging.StreamHandler(sys.stdout), logging.FileHandler(LOG_PATH, mode="a")],
     )
     return logging.getLogger(__name__)
 
 
+def _cmdline_matches(cmdline: Iterable[str]) -> bool:
+    for item in cmdline:
+        for target in TARGET_COMMANDS:
+            if target in item:
+                return True
+    return False
+
+
 def find_training_process() -> psutil.Process | None:
-    """Find the running training process."""
-    for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+    """Locate an active training process."""
+    for proc in psutil.process_iter(["pid", "cmdline"]):
         try:
-            cmdline = ' '.join(proc.info['cmdline'] or [])
-            if 'run_cloud_training.py' in cmdline:
+            cmdline = proc.info.get("cmdline") or []
+            if _cmdline_matches(cmdline):
                 return proc
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return None
 
 
-def check_gpu_usage() -> Dict[str, Any]:
-    """Check GPU usage and memory."""
+def check_accelerator_usage() -> Dict[str, Any]:
+    """Report accelerator utilisation for MPS or CUDA."""
     try:
+        import torch
+
+        if torch.backends.mps.is_available():
+            allocated = torch.mps.driver_allocated_memory()
+            limit = torch.mps.driver_available_memory()
+            return {
+                "status": "healthy",
+                "backend": "mps",
+                "allocated_mb": allocated / (1024 ** 2),
+                "available_mb": limit / (1024 ** 2),
+            }
+        if torch.cuda.is_available():
+            stats = torch.cuda.memory_stats()
+            return {
+                "status": "healthy",
+                "backend": "cuda",
+                "allocated_mb": stats.get("active_bytes.all.current", 0) / (1024 ** 2),
+                "reserved_mb": stats.get("reserved_bytes.all.current", 0) / (1024 ** 2),
+            }
+    except Exception:
+        pass
+
+    if shutil.which("nvidia-smi"):
         import subprocess
-        result = subprocess.run(['nvidia-smi', '--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu', 
-                               '--format=csv,noheader,nounits'], 
-                              capture_output=True, text=True, timeout=10)
-        
+
+        result = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=utilization.gpu,memory.used,memory.total,temperature.gpu",
+                "--format=csv,noheader,nounits",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
         if result.returncode == 0:
-            lines = result.stdout.strip().split('\n')
-            gpu_data = []
-            for line in lines:
-                parts = line.split(', ')
-                if len(parts) >= 4:
-                    gpu_data.append({
-                        'utilization': int(parts[0]),
-                        'memory_used': int(parts[1]),
-                        'memory_total': int(parts[2]),
-                        'temperature': int(parts[3])
-                    })
-            return {'gpus': gpu_data, 'status': 'healthy'}
-        else:
-            return {'status': 'error', 'message': 'nvidia-smi failed'}
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+            line = result.stdout.strip().split("\n")[0]
+            util, used, total, temp = (int(x) for x in line.split(", "))
+            return {
+                "status": "healthy",
+                "backend": "nvidia-smi",
+                "util_percent": util,
+                "memory_used_mb": used,
+                "memory_total_mb": total,
+                "temperature_c": temp,
+            }
+        return {"status": "error", "message": "nvidia-smi failed"}
+
+    return {"status": "info", "message": "No accelerator detected"}
 
 
-def check_training_logs(log_file: Path, last_check: float) -> Dict[str, Any]:
-    """Check training logs for recent activity."""
+def check_training_logs(log_file: Path) -> Dict[str, Any]:
     if not log_file.exists():
-        return {'status': 'error', 'message': 'Log file not found'}
-    
-    try:
-        # Read last few lines
-        with open(log_file, 'r') as f:
-            lines = f.readlines()
-            recent_lines = lines[-50:] if len(lines) > 50 else lines
-            
-        # Look for recent activity
-        recent_activity = []
-        for line in recent_lines:
-            if 'step=' in line and 'loss=' in line:
-                recent_activity.append(line.strip())
-        
-        # Check if we have very recent activity
-        log_mtime = log_file.stat().st_mtime
-        is_recent = (time.time() - log_mtime) < 300  # 5 minutes
-        
-        return {
-            'status': 'healthy' if is_recent and recent_activity else 'stale',
-            'recent_activity': recent_activity[-3:] if recent_activity else [],
-            'last_modified': log_mtime,
-            'is_recent': is_recent
-        }
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+        return {"status": "error", "message": "Log file not found"}
+
+    lines = log_file.read_text(errors="ignore").splitlines()
+    tail = lines[-60:]
+    recent = [line for line in tail if "step=" in line and "loss=" in line]
+    mtime = log_file.stat().st_mtime
+    fresh = (time.time() - mtime) < 300
+    return {
+        "status": "healthy" if fresh and recent else "stale",
+        "recent": recent[-3:],
+        "last_modified": mtime,
+    }
 
 
 def check_checkpoints(checkpoint_dir: Path) -> Dict[str, Any]:
-    """Check checkpoint status."""
     if not checkpoint_dir.exists():
-        return {'status': 'error', 'message': 'Checkpoint directory not found'}
-    
-    try:
-        checkpoint_files = list(checkpoint_dir.glob("step-*.pt"))
-        if not checkpoint_files:
-            return {'status': 'warning', 'message': 'No checkpoints found'}
-        
-        # Get latest checkpoint
-        latest_checkpoint = max(checkpoint_files, key=lambda p: p.stat().st_mtime)
-        checkpoint_time = latest_checkpoint.stat().st_mtime
-        
-        return {
-            'status': 'healthy',
-            'count': len(checkpoint_files),
-            'latest': str(latest_checkpoint),
-            'latest_time': checkpoint_time,
-            'age_minutes': (time.time() - checkpoint_time) / 60
-        }
-    except Exception as e:
-        return {'status': 'error', 'message': str(e)}
+        return {"status": "error", "message": "Checkpoint directory missing"}
+
+    checkpoints = sorted(checkpoint_dir.glob("step-*.pt"), key=lambda p: p.stat().st_mtime)
+    if not checkpoints:
+        return {"status": "warning", "message": "No checkpoints yet"}
+
+    latest = checkpoints[-1]
+    age_min = (time.time() - latest.stat().st_mtime) / 60
+    return {
+        "status": "healthy",
+        "count": len(checkpoints),
+        "latest": latest,
+        "age_minutes": age_min,
+    }
 
 
-def generate_recovery_commands(checkpoint_dir: Path) -> list[str]:
-    """Generate recovery commands."""
-    commands = []
-    
-    # Check if we have checkpoints
-    checkpoint_files = list(checkpoint_dir.glob("step-*.pt"))
-    if checkpoint_files:
-        latest = max(checkpoint_files, key=lambda p: p.stat().st_mtime)
-        step_num = latest.stem.split('-')[-1]
-        commands.append(f"# Resume from latest checkpoint (step {step_num})")
-        commands.append(f"python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --resume --skip-data")
-    else:
-        commands.append("# No checkpoints found - start from scratch")
-        commands.append(f"python scripts/run_cloud_training.py --config configs/cloud_training.yaml --stage both --skip-data")
-    
-    return commands
+def recovery_commands(config_path: Path, stage: str | None) -> list[str]:
+    cmd = ["python", "scripts/run_text_pipeline.py", str(config_path)]
+    if stage:
+        cmd.extend(["--stages", stage])
+    return ["# Resume pipeline", " ".join(cmd)]
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Monitor FusterCluck training")
-    parser.add_argument("--log-file", type=Path, default=Path("logs/cloud_training.log"))
-    parser.add_argument("--checkpoint-dir", type=Path, default=Path("artifacts/checkpoints/cloud/stage1"))
-    parser.add_argument("--interval", type=int, default=60, help="Check interval in seconds")
-    parser.add_argument("--auto-recovery", action="store_true", help="Automatically restart training if crashed")
-    
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Monitor FusterCluck text training")
+    parser.add_argument("--log-file", type=Path, default=Path("logs/text_pipeline.log"))
+    parser.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        default=Path("artifacts/checkpoints/pipeline/main_pretrain_12k"),
+    )
+    parser.add_argument("--interval", type=int, default=90, help="Polling interval in seconds")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/text_pipeline.yaml"),
+        help="Pipeline config used for recovery commands",
+    )
+    parser.add_argument("--stage", type=str, default="main_pretrain_12k", help="Stage name to resume")
+
     args = parser.parse_args()
     logger = setup_logging()
-    
-    logger.info("Starting training monitor...")
-    logger.info("Log file: %s", args.log_file)
-    logger.info("Checkpoint dir: %s", args.checkpoint_dir)
-    logger.info("Check interval: %d seconds", args.interval)
-    
-    last_check = time.time()
-    
+    logger.info("Monitoring started; log=%s checkpoint_dir=%s", args.log_file, args.checkpoint_dir)
+
     try:
         while True:
-            logger.info("=== Training Health Check ===")
-            
-            # Check training process
-            training_proc = find_training_process()
-            if training_proc:
-                logger.info("✅ Training process found (PID: %d)", training_proc.pid)
-                logger.info("   CPU: %.1f%%, Memory: %.1f%%", 
-                           training_proc.cpu_percent(), training_proc.memory_percent())
+            proc = find_training_process()
+            if proc:
+                logger.info("✅ Training PID %d | CPU %.1f%% | RSS %.2f GB", proc.pid, proc.cpu_percent(), proc.memory_info().rss / (1024 ** 3))
             else:
-                logger.warning("❌ No training process found")
-            
-            # Check GPU
-            gpu_status = check_gpu_usage()
-            if gpu_status['status'] == 'healthy':
-                for i, gpu in enumerate(gpu_status['gpus']):
-                    logger.info("🖥️  GPU %d: %d%% util, %d/%d MB memory, %d°C", 
-                               i, gpu['utilization'], gpu['memory_used'], 
-                               gpu['memory_total'], gpu['temperature'])
+                logger.warning("❌ Training process not found")
+
+            accel = check_accelerator_usage()
+            if accel["status"] == "healthy":
+                logger.info("⚙️  Accelerator: %s", accel)
             else:
-                logger.error("❌ GPU check failed: %s", gpu_status['message'])
-            
-            # Check logs
-            log_status = check_training_logs(args.log_file, last_check)
-            if log_status['status'] == 'healthy':
-                logger.info("📝 Logs: Recent activity detected")
-                for activity in log_status['recent_activity']:
-                    logger.info("   %s", activity)
-            elif log_status['status'] == 'stale':
-                logger.warning("⚠️  Logs: No recent activity (last modified: %.1f minutes ago)", 
-                              (time.time() - log_status['last_modified']) / 60)
+                logger.info("⚙️  Accelerator info: %s", accel.get("message", accel["status"]))
+
+            log_status = check_training_logs(args.log_file)
+            if log_status["status"] == "healthy":
+                for line in log_status["recent"]:
+                    logger.info("📝 %s", line)
+            elif log_status["status"] == "stale":
+                minutes = (time.time() - log_status["last_modified"]) / 60
+                logger.warning("⚠️  Log inactive for %.1f minutes", minutes)
             else:
-                logger.error("❌ Log check failed: %s", log_status['message'])
-            
-            # Check checkpoints
+                logger.error("Log check failed: %s", log_status["message"])
+
             ckpt_status = check_checkpoints(args.checkpoint_dir)
-            if ckpt_status['status'] == 'healthy':
-                logger.info("💾 Checkpoints: %d found, latest age: %.1f minutes", 
-                           ckpt_status['count'], ckpt_status['age_minutes'])
+            if ckpt_status["status"] == "healthy":
+                logger.info("💾 %d checkpoints; latest age %.1f min", ckpt_status["count"], ckpt_status["age_minutes"])
             else:
-                logger.warning("⚠️  Checkpoints: %s", ckpt_status['message'])
-            
-            # Auto-recovery if needed
-            if args.auto_recovery and not training_proc:
-                logger.info("🔄 Auto-recovery: Training not running, attempting restart...")
-                recovery_commands = generate_recovery_commands(args.checkpoint_dir)
-                logger.info("Recovery commands:")
-                for cmd in recovery_commands:
+                logger.warning("💾 %s", ckpt_status["message"])
+
+            if not proc:
+                logger.info("Suggested recovery:")
+                for cmd in recovery_commands(args.config, args.stage):
                     logger.info("   %s", cmd)
-                # Note: In a real implementation, you'd execute these commands
-            
-            logger.info("Next check in %d seconds...", args.interval)
+
             time.sleep(args.interval)
-            last_check = time.time()
-            
     except KeyboardInterrupt:
         logger.info("Monitoring stopped by user")
-    except Exception as e:
-        logger.error("Monitor error: %s", e)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.exception("Monitoring error: %s", exc)
         sys.exit(1)
 
 

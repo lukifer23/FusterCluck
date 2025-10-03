@@ -1,0 +1,80 @@
+trainer:
+  device: cpu
+  precision: bf16
+  use_compile: false
+  gradient_checkpointing: true
+  checkpoint:
+    directory: artifacts/checkpoints/pipeline
+    keep_last: 4
+
+stages:
+  - name: bootstrap_4k
+    dataset_path: data/tokenized/bootstrap.bin
+    idx_path: data/tokenized/bootstrap.idx
+    tokenizer_path: artifacts/tokenizer/fustercluck.model
+    max_steps: 600
+    seq_len: 4096
+    micro_batch_size: 1
+    gradient_accumulation: 16
+    precision: bf16
+    log_interval: 10
+    eval_interval: 200
+    model_dim: 768
+    model_layers: 12
+    model_heads: 12
+    model_kv_heads: 2
+    mlp_ratio: 3.2
+    rope_theta: 10000
+    dropout: 0.0
+    optimizer:
+      lr: 0.00025
+      betas: [0.9, 0.95]
+      weight_decay: 0.1
+    trainer:
+      gradient_checkpointing: true
+
+  - name: main_pretrain_12k
+    dataset_path: data/tokenized/main.bin
+    idx_path: data/tokenized/main.idx
+    tokenizer_path: artifacts/tokenizer/fustercluck.model
+    max_steps: 10
+    seq_len: 8192
+    micro_batch_size: 1
+    gradient_accumulation: 16
+    precision: bf16
+    log_interval: 1
+    eval_interval: 5
+    model_dim: 896
+    model_layers: 18
+    model_heads: 14
+    model_kv_heads: 2
+    mlp_ratio: 3.5
+    rope_theta: 10000
+    dropout: 0.0
+    optimizer:
+      lr: 0.0002
+      betas: [0.9, 0.95]
+      weight_decay: 0.1
+
+  - name: instruct_sft
+    dataset_path: data/tokenized/sft.bin
+    idx_path: data/tokenized/sft.idx
+    tokenizer_path: artifacts/tokenizer/fustercluck.model
+    max_steps: 1500
+    seq_len: 12288
+    micro_batch_size: 1
+    gradient_accumulation: 24
+    precision: bf16
+    log_interval: 10
+    eval_interval: 200
+    model_dim: 896
+    model_layers: 18
+    model_heads: 14
+    model_kv_heads: 2
+    mlp_ratio: 3.5
+    rope_theta: 10000
+    dropout: 0.0
+    optimizer:
+      lr: 5.0e-5
+      betas: [0.9, 0.95]
+      weight_decay: 0.05

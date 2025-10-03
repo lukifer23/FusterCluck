@@ -1,4 +1,4 @@
-"""Utilities to train SentencePiece tokenizers for FusterCluck."""
+"""Utilities to train SentencePiece tokenizers for the text-only stack."""
 
 from __future__ import annotations
 
@@ -43,8 +43,8 @@ def train_sentencepiece(
         "normalization_rule_name": normalization_rule_name,
         "input_sentence_size": input_sentence_size,
         "shuffle_input_sentence": int(shuffle_input_sentence),
-        "max_sentence_length": 4096,
-        "num_threads": max(1, os.cpu_count() or 1 // 2),
+        "max_sentence_length": 16384,
+        "num_threads": max(1, (os.cpu_count() or 1) // 2 or 1),
     }
     LOGGER.info("Training SentencePiece model: %s", train_cmd)
     spm.SentencePieceTrainer.train(**train_cmd)

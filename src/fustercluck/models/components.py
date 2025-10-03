@@ -1,14 +1,15 @@
-"""Core transformer components for FusterCluck-450."""
+"""Core transformer components for FusterCluck text-only models."""
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 
 @dataclass
@@ -27,12 +28,9 @@ class RMSNorm(nn.Module):
         self.weight = nn.Parameter(torch.ones(dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # Compute RMS norm with numerical stability
-        # Use torch operations for better gradient flow and numerical stability
         norm_squared = torch.sum(x * x, dim=-1, keepdim=True)
         rms = torch.sqrt(norm_squared / x.size(-1) + self.eps)
-        x_norm = x / rms
-        return self.weight * x_norm
+        return self.weight * (x / rms)
 
 
 class RotaryEmbedding(nn.Module):
@@ -46,7 +44,7 @@ class RotaryEmbedding(nn.Module):
         self.register_buffer("inv_freq", inv_freq, persistent=False)
         self.scale_base = cfg.scale_base
 
-    def get_embed(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> Tuple[torch.Tensor, torch.Tensor]:
+    def get_embed(self, seq_len: int, device: torch.device, dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
         t = torch.arange(seq_len, device=device, dtype=self.inv_freq.dtype)
         freqs = torch.einsum("i,j->ij", t, self.inv_freq)
         if self.scale_base is not None:
@@ -55,7 +53,7 @@ class RotaryEmbedding(nn.Module):
         freqs = freqs.to(dtype)
         return freqs.sin(), freqs.cos()
 
-    def forward(self, q: torch.Tensor, k: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, q: torch.Tensor, k: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         seq_len = q.size(-2)
         sin, cos = self.get_embed(seq_len, q.device, q.dtype)
         q_rot, q_pass = torch.chunk(q, 2, dim=-1)
@@ -115,13 +113,12 @@ class GQAttention(nn.Module):
         k = self.k_proj(x).view(bsz, seq_len, self.num_kv_heads, self.head_dim)
         v = self.v_proj(x).view(bsz, seq_len, self.num_kv_heads, self.head_dim)
 
-        # Expand KV heads to match number of query heads
         if self.num_heads != self.num_kv_heads:
             repeat_factor = self.num_heads // self.num_kv_heads
             k = k.repeat_interleave(repeat_factor, dim=2)
             v = v.repeat_interleave(repeat_factor, dim=2)
 
-        q = q.transpose(1, 2)  # (B, H, T, D)
+        q = q.transpose(1, 2)
         k = k.transpose(1, 2)
         v = v.transpose(1, 2)
 
@@ -173,8 +170,13 @@ class TransformerBlock(nn.Module):
         self.attn = GQAttention(dim, num_heads, num_kv_heads, rope, dropout)
         self.ffn = SwiGLUFeedForward(dim, hidden_dim)
 
-    def forward(self, x: torch.Tensor, attn_mask: Optional[torch.Tensor] = None, is_causal: bool = True) -> torch.Tensor:
-        x = x + self.attn(self.attn_norm(x), attention_mask=attn_mask, is_causal=is_causal)
+    def forward(
+        self,
+        x: torch.Tensor,
+        attention_mask: Optional[torch.Tensor] = None,
+        is_causal: bool = True,
+    ) -> torch.Tensor:
+        x = x + self.attn(self.attn_norm(x), attention_mask=attention_mask, is_causal=is_causal)
         x = x + self.ffn(self.ffn_norm(x))
         return x
 
@@ -197,6 +199,7 @@ class FusterCluckDecoder(nn.Module):
         self.vocab_size = vocab_size
         self.dim = dim
         self.embed = nn.Embedding(vocab_size, dim)
+        self.embed_scale = math.sqrt(dim)
         rope_cfg = RotaryConfig(dim=dim // num_heads, base=rope_theta)
         rope = RotaryEmbedding(rope_cfg)
         self.layers = nn.ModuleList(
@@ -207,6 +210,7 @@ class FusterCluckDecoder(nn.Module):
         )
         self.final_norm = RMSNorm(dim)
         self.lm_head = nn.Linear(dim, vocab_size, bias=False)
+        self.gradient_checkpointing = False
         self.apply(self._init_weights)
 
     def _init_weights(self, module: nn.Module) -> None:
@@ -217,31 +221,41 @@ class FusterCluckDecoder(nn.Module):
         elif isinstance(module, nn.Embedding):
             nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
+    def gradient_checkpointing_enable(self) -> None:
+        self.gradient_checkpointing = True
+
+    def gradient_checkpointing_disable(self) -> None:
+        self.gradient_checkpointing = False
+
+    def _checkpointed_forward(self, layer: TransformerBlock, hidden_states: torch.Tensor, attention_mask: Optional[torch.Tensor], is_causal: bool) -> torch.Tensor:
+        def custom_forward(x: torch.Tensor) -> torch.Tensor:
+            return layer(x, attention_mask=attention_mask, is_causal=is_causal)
+
+        return checkpoint(custom_forward, hidden_states, use_reentrant=False)
+
     def forward(
         self,
         input_ids: torch.Tensor,
         attention_mask: Optional[torch.Tensor] = None,
-        vision_embeddings: Optional[torch.Tensor] = None,
-        vision_mask: Optional[torch.Tensor] = None,
+        *,
+        is_causal: bool = True,
     ) -> torch.Tensor:
-        x = self.embed(input_ids)
-        if vision_embeddings is not None:
-            if vision_mask is None:
-                raise ValueError("vision_mask is required when vision_embeddings are provided")
-            bsz = x.size(0)
-            num_queries = vision_embeddings.size(1)
-            for batch_idx in range(bsz):
-                positions = vision_mask[batch_idx].nonzero(as_tuple=False).squeeze(-1)
-                if positions.numel() == 0:
-                    continue
-                count = min(positions.numel(), num_queries)
-                x[batch_idx, positions[:count]] = vision_embeddings[batch_idx, :count]
+        x = self.embed(input_ids) * self.embed_scale
         for layer in self.layers:
-            x = layer(x, attention_mask)
+            if self.gradient_checkpointing and self.training:
+                x = self._checkpointed_forward(layer, x, attention_mask, is_causal)
+            else:
+                x = layer(x, attention_mask=attention_mask, is_causal=is_causal)
         x = self.final_norm(x)
         return self.lm_head(x)
 
-    def generate(self, input_ids: torch.Tensor, max_new_tokens: int, temperature: float = 1.0) -> torch.Tensor:
+    @torch.no_grad()
+    def generate(
+        self,
+        input_ids: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+    ) -> torch.Tensor:
         """Simple greedy sampling loop for quick smoke tests."""
 
         generated = [input_ids]
@@ -252,3 +266,14 @@ class FusterCluckDecoder(nn.Module):
             cur_ids = torch.cat([cur_ids, next_token], dim=1)
             generated.append(next_token)
         return torch.cat(generated, dim=1)
+
+
+__all__ = [
+    "RotaryConfig",
+    "RMSNorm",
+    "RotaryEmbedding",
+    "GQAttention",
+    "SwiGLUFeedForward",
+    "TransformerBlock",
+    "FusterCluckDecoder",
+]

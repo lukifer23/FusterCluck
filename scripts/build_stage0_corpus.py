@@ -63,22 +63,24 @@ def estimate_tokens(text: str) -> int:
     return max(len(text.split()), 1)
 
 
-def build_corpus(manifest: Path, output: Path, target_tokens: int) -> dict:
+def build_corpus(manifest: Path, output: Path, target_tokens: int, *, allow_repeats: bool = False) -> dict:
     sources = load_manifest(manifest)
     weight_total = sum(src["weight"] for src in sources)
     token_budget = {src["name"]: int(target_tokens * (src["weight"] / weight_total)) for src in sources}
     LOGGER.info("Token budget per source: %s", token_budget)
 
     queues: dict[str, deque[str]] = {}
+    source_cache: dict[str, list[str]] = {}
     for src in sources:
         lines = list(iter_lines(src["paths"]))
         if not lines:
             raise RuntimeError(f"Source {src['name']} is empty")
         random.shuffle(lines)
         queues[src["name"]] = deque(lines)
+        source_cache[src["name"]] = lines
         LOGGER.info("Loaded %d lines for %s", len(lines), src["name"])
 
-    seen = set()
+    seen = set() if not allow_repeats else None
     written_lines: List[str] = []
     approx_tokens = 0
     domain_tokens = {name: 0 for name in queues}
@@ -91,13 +93,21 @@ def build_corpus(manifest: Path, output: Path, target_tokens: int) -> dict:
             continue
         queue = queues[name]
         if not queue:
-            LOGGER.warning("Source %s exhausted before hitting target", name)
-            domain_tokens[name] = token_budget[name]
-            continue
+            if allow_repeats:
+                refill = source_cache[name][:]
+                random.shuffle(refill)
+                queue.extend(refill)
+            else:
+                LOGGER.warning("Source %s exhausted before hitting target", name)
+                domain_tokens[name] = token_budget[name]
+                continue
         line = queue.popleft()
-        if line in seen:
-            continue
-        seen.add(line)
+        if allow_repeats:
+            queue.append(line)
+        if seen is not None:
+            if line in seen:
+                continue
+            seen.add(line)
         tokens = estimate_tokens(line)
         approx_tokens += tokens
         domain_tokens[name] += tokens
@@ -130,6 +140,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--manifest", type=Path, required=True, help="YAML manifest describing domain sources")
     parser.add_argument("--output", type=Path, default=Path("data/raw/stage0_domain.txt"))
     parser.add_argument("--target-tokens", type=int, default=50_000_000)
+    parser.add_argument("--allow-repeats", action="store_true", help="Allow reusing lines when target tokens exceed corpus size")
     parser.add_argument("--log", default="INFO")
     return parser.parse_args()
 
@@ -137,7 +148,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log.upper()), format="[%(levelname)s] %(message)s")
-    build_corpus(args.manifest, args.output, args.target_tokens)
+    build_corpus(args.manifest, args.output, args.target_tokens, allow_repeats=args.allow_repeats)
 
 
 if __name__ == "__main__":
