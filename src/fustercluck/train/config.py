@@ -51,9 +51,10 @@ class TrainerConfig:
     use_compile: bool = True
     compile_mode: str = "reduce-overhead"
     precision: str = "bf16"
-    dataloader_workers: int = 0
-    pin_memory: bool = False
-    persistent_workers: bool = False
+    dataloader_workers: int = 4  # Enable multi-threaded data loading for Apple Silicon
+    pin_memory: bool = False  # MPS doesn't benefit from pin_memory
+    persistent_workers: bool = True  # Keep workers alive between epochs
+    prefetch_factor: int = 2  # Number of batches to prefetch per worker
     env: Optional[Dict[str, str]] = None
     checkpoint: Optional[CheckpointConfig] = None
     gradient_checkpointing: bool = False

@@ -1,6 +1,6 @@
 trainer:
-  device: cpu
-  precision: bf16
+  device: mps
+  precision: fp32
   use_compile: false
   gradient_checkpointing: true
   checkpoint:
@@ -38,10 +38,10 @@ stages:
     idx_path: data/tokenized/main.idx
     tokenizer_path: artifacts/tokenizer/fustercluck.model
     max_steps: 10
-    seq_len: 8192
+    seq_len: 12288
     micro_batch_size: 1
-    gradient_accumulation: 16
-    precision: bf16
+    gradient_accumulation: 64
+    precision: fp32
     log_interval: 1
     eval_interval: 5
     model_dim: 896

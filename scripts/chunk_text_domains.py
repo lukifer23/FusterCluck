@@ -7,7 +7,7 @@ import argparse
 from pathlib import Path
 
 
-def chunk_file(path: Path, *, chunk_words: int, min_words: int, suffix: str) -> Path:
+def chunk_file(path: Path, output_dir: Path, *, chunk_words: int, min_words: int, suffix: str) -> Path:
     text = path.read_text(encoding="utf-8", errors="ignore")
     words = text.split()
     if len(words) <= min_words:
@@ -20,21 +20,22 @@ def chunk_file(path: Path, *, chunk_words: int, min_words: int, suffix: str) -> 
         chunks.append(" ".join(window))
     if not chunks:
         return path
-    output = path.with_name(path.stem + suffix + path.suffix)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    output = output_dir / f"{path.stem}{suffix}{path.suffix}"
     with output.open("w", encoding="utf-8") as handle:
         for chunk in chunks:
             handle.write(chunk.strip() + "\n")
     return output
 
 
-def process_domain(directory: Path, *, extensions: tuple[str, ...], chunk_words: int, min_words: int, suffix: str) -> list[Path]:
+def process_domain(directory: Path, output_dir: Path, *, extensions: tuple[str, ...], chunk_words: int, min_words: int, suffix: str) -> list[Path]:
     generated: list[Path] = []
     for file in directory.rglob("*"):
         if file.suffix.lower() not in extensions:
             continue
-        if file.stem.endswith(suffix.strip("_")):
+        if file.parent == output_dir or suffix.strip("_") in file.stem:
             continue
-        output = chunk_file(file, chunk_words=chunk_words, min_words=min_words, suffix=suffix)
+        output = chunk_file(file, output_dir, chunk_words=chunk_words, min_words=min_words, suffix=suffix)
         if output != file:
             generated.append(output)
     return generated
@@ -47,6 +48,7 @@ def main() -> None:
     parser.add_argument("--min-words", type=int, default=64, help="Discard chunks shorter than this many words")
     parser.add_argument("--suffix", type=str, default="_chunked", help="Suffix added to new files")
     parser.add_argument("--domains", type=str, default="", help="Comma-separated list of domains to process (defaults to physics,math,general)")
+    parser.add_argument("--output-root", type=Path, default=None, help="Optional directory to store chunked files (defaults beside originals)")
     args = parser.parse_args()
     generated_total = []
     domains = args.domains.split(",") if args.domains else ["physics", "math", "general"]
@@ -54,10 +56,11 @@ def main() -> None:
         domain_dir = args.root / domain
         if not domain_dir.exists():
             continue
-        generated = process_domain(domain_dir, extensions=(".txt",), chunk_words=args.chunk_words, min_words=args.min_words, suffix=args.suffix)
+        output_dir = domain_dir if args.output_root is None else args.output_root / domain
+        generated = process_domain(domain_dir, output_dir, extensions=(".txt",), chunk_words=args.chunk_words, min_words=args.min_words, suffix=args.suffix)
         generated_total.extend(generated)
         if generated:
-            print(f"Generated {len(generated)} chunk files in {domain_dir}")
+            print(f"Generated {len(generated)} chunk files in {output_dir}")
     if not generated_total:
         print("No chunk files generated (all files too small or already chunked).")
 
