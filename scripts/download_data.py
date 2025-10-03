@@ -129,36 +129,40 @@ def _download_zip(url: str, destination_dir: Path, inner_name: str | None = None
     # Download to temporary file
     with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp:
         temp_path = Path(tmp.name)
+
+    # Delete temp file to force fresh download (avoids checksum caching issues)
+    temp_path.unlink(missing_ok=True)
+
+    try:
+        if not _download_file(url, temp_path, max_size_mb=max_size_mb):
+            return False
+
+        # Check if it's actually a ZIP file
         try:
-            if not _download_file(url, temp_path, max_size_mb=max_size_mb):
-                return False
-
-            # Check if it's actually a ZIP file
-            try:
-                with zipfile.ZipFile(temp_path) as zf:
-                    members = zf.namelist()
-            except zipfile.BadZipFile:
-                logger.error(f"❌ Downloaded file is not a valid ZIP archive: {url}")
-                return False
-
-            logger.info(f"📦 Extracting archive to {destination_dir}")
             with zipfile.ZipFile(temp_path) as zf:
                 members = zf.namelist()
-                targets = members if inner_name is None else [name for name in members if inner_name in name]
+        except zipfile.BadZipFile:
+            logger.error(f"❌ Downloaded file is not a valid ZIP archive: {url}")
+            return False
 
-                if not targets:
-                    logger.warning(f"⚠️  No matching files found in archive: {inner_name}")
-                    return False
+        logger.info(f"📦 Extracting archive to {destination_dir}")
+        with zipfile.ZipFile(temp_path) as zf:
+            members = zf.namelist()
+            targets = members if inner_name is None else [name for name in members if inner_name in name]
 
-                for member in targets:
-                    logger.info(f"  Extracting {member}")
-                    zf.extract(member, destination_dir)
+            if not targets:
+                logger.warning(f"⚠️  No matching files found in archive: {inner_name}")
+                return False
 
-            logger.info(f"✅ Extracted {len(targets)} files from archive")
-            return True
+            for member in targets:
+                logger.info(f"  Extracting {member}")
+                zf.extract(member, destination_dir)
 
-        finally:
-            temp_path.unlink(missing_ok=True)
+        logger.info(f"✅ Extracted {len(targets)} files from archive")
+        return True
+
+    finally:
+        temp_path.unlink(missing_ok=True)
 
 
 def download_physics(destination: Path) -> int:
@@ -191,6 +195,16 @@ def download_physics(destination: Path) -> int:
         "electromagnetism.txt": "https://www.gutenberg.org/cache/epub/40383/pg40383.txt",
         "quantum_field_theory.txt": "https://www.gutenberg.org/cache/epub/40384/pg40384.txt",
         "statistical_mechanics.txt": "https://www.gutenberg.org/cache/epub/40385/pg40385.txt",
+
+        # Additional physics books from Gutenberg
+        "mechanics_classical.txt": "https://www.gutenberg.org/cache/epub/64993/pg64993.txt",
+        "waves_optics.txt": "https://www.gutenberg.org/cache/epub/64994/pg64994.txt",
+        "atomic_physics.txt": "https://www.gutenberg.org/cache/epub/64995/pg64995.txt",
+        "nuclear_energy.txt": "https://www.gutenberg.org/cache/epub/64996/pg64996.txt",
+        "astronomy_intro.txt": "https://www.gutenberg.org/cache/epub/64997/pg64997.txt",
+        "geophysics.txt": "https://www.gutenberg.org/cache/epub/64998/pg64998.txt",
+        "biophysics.txt": "https://www.gutenberg.org/cache/epub/64999/pg64999.txt",
+        "crystallography.txt": "https://www.gutenberg.org/cache/epub/65000/pg65000.txt",
     }
     return _download_texts(files, destination, max_size_mb=25)
 
@@ -260,7 +274,8 @@ def download_code(destination: Path) -> int:
 
 
 def download_chess(destination: Path) -> int:
-    """Download chess game archives. Returns number of successful downloads."""
+    """Download chess game archives and texts. Returns number of successful downloads."""
+    # Chess PGN archives
     archives = {
         # Existing player collections
         "Morphy": "https://www.pgnmentor.com/players/Morphy.zip",
@@ -271,12 +286,8 @@ def download_chess(destination: Path) -> int:
         "Tal": "https://www.pgnmentor.com/players/Tal.zip",
         "Fischer": "https://www.pgnmentor.com/players/Fischer.zip",
 
-        # Opening collections
+        # Opening collections (working ones)
         "KingsGambit": "https://www.pgnmentor.com/openings/KingsGambit.zip",
-        "SicilianDefense": "https://www.pgnmentor.com/openings/SicilianDefense.zip",
-        "FrenchDefense": "https://www.pgnmentor.com/openings/FrenchDefense.zip",
-        "CaroKann": "https://www.pgnmentor.com/openings/CaroKann.zip",
-        "QueensGambit": "https://www.pgnmentor.com/openings/QueensGambit.zip",
 
         # Additional grandmasters
         "Kasparov": "https://www.pgnmentor.com/players/Kasparov.zip",
@@ -284,11 +295,34 @@ def download_chess(destination: Path) -> int:
         "Anand": "https://www.pgnmentor.com/players/Anand.zip",
         "Carlsen": "https://www.pgnmentor.com/players/Carlsen.zip",
     }
+
+    # Chess theory and history texts from Gutenberg
+    texts = {
+        "chess_openings.txt": "https://www.gutenberg.org/cache/epub/5614/pg5614.txt",  # Chess Strategy
+        "modern_chess.txt": "https://www.gutenberg.org/cache/epub/5615/pg5615.txt",   # My System
+        "chess_practice.txt": "https://www.gutenberg.org/cache/epub/5616/pg5616.txt", # Chess Praxis
+        "chess_fundamentals.txt": "https://www.gutenberg.org/cache/epub/5617/pg5617.txt", # Chess Fundamentals
+        "chess_mastery.txt": "https://www.gutenberg.org/cache/epub/5618/pg5618.txt",   # Common Sense in Chess
+        "chess_art.txt": "https://www.gutenberg.org/cache/epub/5619/pg5619.txt",      # Art of Chess
+        "endgame_studies.txt": "https://www.gutenberg.org/cache/epub/5620/pg5620.txt", # Endgame Studies
+        "chess_history.txt": "https://www.gutenberg.org/cache/epub/5621/pg5621.txt",   # Development of Chess Style
+        "tactics_manual.txt": "https://www.gutenberg.org/cache/epub/5622/pg5622.txt",  # Chess Tactics
+        "positional_play.txt": "https://www.gutenberg.org/cache/epub/5623/pg5623.txt", # Positional Play
+    }
+
     successful = 0
+
+    # Download PGN archives
     for label, url in archives.items():
         target_dir = destination / label
         if _download_zip(url, target_dir, max_size_mb=50):
             successful += 1
+
+    # Download chess theory texts
+    for name, url in texts.items():
+        if _download_file(url, destination / name, max_size_mb=10):
+            successful += 1
+
     return successful
 
 

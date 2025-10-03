@@ -37,7 +37,7 @@ stages:
     dataset_path: data/tokenized/main.bin
     idx_path: data/tokenized/main.idx
     tokenizer_path: artifacts/tokenizer/fustercluck.model
-    max_steps: 10
+    max_steps: 15000
     seq_len: 12288
     micro_batch_size: 1
     gradient_accumulation: 64

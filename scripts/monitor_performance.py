@@ -39,6 +39,15 @@ def get_gpu_memory():
             "reserved": torch.cuda.memory_reserved(),
             "max_allocated": torch.cuda.max_memory_allocated()
         }
+    elif hasattr(torch, 'mps') and torch.mps.is_available():
+        # For Apple Silicon MPS
+        try:
+            return {
+                "allocated": torch.mps.current_allocated_memory(),
+                "max_allocated": torch.mps.driver_allocated_memory()  # Approximate max
+            }
+        except:
+            pass
     return {}
 
 def monitor_performance(interval: int = 60):

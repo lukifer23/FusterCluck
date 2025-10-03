@@ -21,6 +21,19 @@ class CheckpointManager:
         checkpoints = sorted(self.directory.glob("step-*.pt"), key=lambda p: p.stat().st_mtime)
         return checkpoints[-1] if checkpoints else None
 
+    def load(self, path: Path | None = None) -> Dict[str, Any] | None:
+        """Load checkpoint from path or latest."""
+        if path is None:
+            path = self.latest()
+        if path is None or not path.exists():
+            return None
+
+        try:
+            return torch.load(path, map_location='cpu', weights_only=False)
+        except Exception as e:
+            print(f"Failed to load checkpoint {path}: {e}")
+            return None
+
     def save(
         self,
         step: int,

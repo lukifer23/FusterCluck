@@ -210,71 +210,130 @@ class TextStageTrainer:
         if self.device.type == "cuda" and self.trainer_cfg.precision == "fp16":
             scaler = torch.cuda.amp.GradScaler()
 
+        # Try to resume from checkpoint
+        self._load_checkpoint()
+
         self._install_signal_handlers()
 
         while self.step < self.cfg.max_steps:
-            loss_accum = torch.tensor(0.0, device=self.device)
-            step_start = time.time()
+            try:
+                loss_accum = torch.tensor(0.0, device=self.device)
+                step_start = time.time()
 
-            for accum_step in range(grad_accum):
-                batch = self._next_batch()
-                batch = batch.to(self.device)
-                input_ids = batch[:, :-1]
-                targets = batch[:, 1:]
-                with amp_autocast(self.trainer_cfg.precision, self.device):
-                    logits = self.model(input_ids)
-                    loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
-                    loss = loss / grad_accum
+                for accum_step in range(grad_accum):
+                    batch = self._next_batch()
+                    batch = batch.to(self.device)
+                    input_ids = batch[:, :-1]
+                    targets = batch[:, 1:]
+                    with amp_autocast(self.trainer_cfg.precision, self.device):
+                        logits = self.model(input_ids)
+                        loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), targets.reshape(-1))
+                        loss = loss / grad_accum
+                    if scaler is not None:
+                        scaler.scale(loss).backward()
+                    else:
+                        loss.backward()
+                    loss_accum += loss.detach()  # Accumulate tensor directly for better precision
+
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.trainer_cfg.grad_clip)
                 if scaler is not None:
-                    scaler.scale(loss).backward()
+                    scaler.step(self.optimizer)
+                    scaler.update()
                 else:
-                    loss.backward()
-                loss_accum += loss.detach()  # Accumulate tensor directly for better precision
+                    self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
 
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.trainer_cfg.grad_clip)
-            if scaler is not None:
-                scaler.step(self.optimizer)
-                scaler.update()
-            else:
-                self.optimizer.step()
-            self.optimizer.zero_grad(set_to_none=True)
-            self.step += 1
+                # Memory cleanup for MPS
+                if hasattr(torch, 'mps') and torch.mps.is_available():
+                    torch.mps.empty_cache()
 
-            elapsed = time.time() - step_start
-            self.throughput.update(self.tokens_per_update, elapsed)
-            self.total_elapsed += elapsed
+                self.step += 1
 
-            if self.step % self.cfg.log_interval == 0:
-                avg_step = self.total_elapsed / self.step if self.step else 0.0
-                remaining_steps = max(self.cfg.max_steps - self.step, 0)
-                eta_seconds = avg_step * remaining_steps
-                loss_value = loss_accum.item() * grad_accum
-                print(f"[TRAINING] step={self.step} loss={loss_value:.4f} "
-                      f"tokens/s={self.throughput.tokens_per_second:.1f} eta={format_timespan(eta_seconds) if self.step else '--:--'}")
-                LOGGER.info(
-                    "step=%d loss=%.4f tokens/s=%.1f eta=%s",
-                    self.step,
-                    loss_value,
-                    self.throughput.tokens_per_second,
-                    format_timespan(eta_seconds) if self.step else "--:--",
-                )
-                self.throughput.reset()
+                elapsed = time.time() - step_start
+                self.throughput.update(self.tokens_per_update, elapsed)
+                self.total_elapsed += elapsed
 
-            if self.step % self.cfg.eval_interval == 0:
-                eval_batch = self._next_batch().to(self.device)
-                eval_loss = evaluate(self.model, eval_batch, self.device)
-                LOGGER.info("eval_loss=%.4f", eval_loss)
-                checkpoint_path = self.checkpoint.save(
-                    self.step,
-                    self.model,
-                    self.optimizer,
-                    eval_loss=eval_loss,
-                    elapsed=self.total_elapsed,
-                )
-                LOGGER.info("Checkpoint saved to %s", checkpoint_path)
+                if self.step % self.cfg.log_interval == 0:
+                    avg_step = self.total_elapsed / self.step if self.step else 0.0
+                    remaining_steps = max(self.cfg.max_steps - self.step, 0)
+                    eta_seconds = avg_step * remaining_steps
+                    loss_value = loss_accum.item() * grad_accum
 
-            if math.isnan(loss_accum):
-                raise RuntimeError("NaN detected in loss")
+                    # Memory usage info
+                    memory_info = ""
+                    if hasattr(torch, 'mps') and torch.mps.is_available():
+                        try:
+                            mem_mb = torch.mps.current_allocated_memory() / (1024**2)
+                            memory_info = f" mem={mem_mb:.0f}MB"
+                        except:
+                            pass
+
+                    print(f"[TRAINING] step={self.step} loss={loss_value:.4f} "
+                          f"tokens/s={self.throughput.tokens_per_second:.1f} eta={format_timespan(eta_seconds) if self.step else '--:--'}{memory_info}")
+                    LOGGER.info(
+                        "step=%d loss=%.4f tokens/s=%.1f eta=%s",
+                        self.step,
+                        loss_value,
+                        self.throughput.tokens_per_second,
+                        format_timespan(eta_seconds) if self.step else "--:--",
+                    )
+                    self.throughput.reset()
+
+                if self.step % self.cfg.eval_interval == 0:
+                    eval_batch = self._next_batch().to(self.device)
+                    eval_loss = evaluate(self.model, eval_batch, self.device)
+                    LOGGER.info("eval_loss=%.4f", eval_loss)
+                    checkpoint_path = self.checkpoint.save(
+                        self.step,
+                        self.model,
+                        self.optimizer,
+                        eval_loss=eval_loss,
+                        elapsed=self.total_elapsed,
+                    )
+                    LOGGER.info("Checkpoint saved to %s", checkpoint_path)
+
+                if math.isnan(loss_accum):
+                    raise RuntimeError("NaN detected in loss")
+
+            except Exception as e:
+                LOGGER.error("Training step %d failed: %s", self.step, e)
+                # Save emergency checkpoint on error
+                try:
+                    emergency_path = self.checkpoint.save(
+                        self.step,
+                        self.model,
+                        self.optimizer,
+                        eval_loss=0.0,
+                        elapsed=self.total_elapsed,
+                        emergency=True,
+                        error=str(e)
+                    )
+                    LOGGER.info("Emergency checkpoint saved to %s", emergency_path)
+                except Exception as save_error:
+                    LOGGER.error("Failed to save emergency checkpoint: %s", save_error)
+
+                # Re-raise the exception to exit
+                raise
+
+    def _load_checkpoint(self) -> None:
+        """Load latest checkpoint if available."""
+        checkpoint_data = self.checkpoint.load()
+        if checkpoint_data:
+            try:
+                self.model.load_state_dict(checkpoint_data["model"])
+                self.optimizer.load_state_dict(checkpoint_data["optimizer"])
+                metadata = checkpoint_data.get("metadata", {})
+                self.step = metadata.get("step", self.step)
+                self.total_elapsed = metadata.get("elapsed", 0.0)
+
+                # Move model to device after loading
+                self.model.to(self.device)
+
+                LOGGER.info("Resumed from checkpoint at step %d", self.step)
+            except Exception as e:
+                LOGGER.warning("Failed to load checkpoint: %s", e)
+        else:
+            LOGGER.info("No checkpoint found, starting from scratch")
 
     def resume_from_checkpoint(self, checkpoint_path: Path) -> None:
         state = torch.load(checkpoint_path, map_location=self.device)

@@ -52,11 +52,15 @@ def load_manifest(manifest_path: Path) -> list[dict]:
 
 def iter_lines(paths: Iterable[Path]) -> Iterator[str]:
     for path in paths:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                if not line.strip():
-                    continue
-                yield line.rstrip("\n")
+        try:
+            with path.open("r", encoding="utf-8", errors="ignore") as handle:
+                for line in handle:
+                    if not line.strip():
+                        continue
+                    yield line.rstrip("\n")
+        except (UnicodeDecodeError, OSError) as e:
+            LOGGER.warning("Skipping file %s due to encoding error: %s", path, e)
+            continue
 
 
 def estimate_tokens(text: str) -> int:
